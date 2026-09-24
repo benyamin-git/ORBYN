@@ -5,18 +5,6 @@ A blue AI wireframe orb that roams your terminal to prevent screen burn-in.
 > AI disclaimer: this project was written with AI assistance; review the code
 > before relying on it.
 
-```
-    SSC+*######%######++
-     SC+*#..**#%...+*##+.
-      +*#   *##%   .**#..
-     =+#   .*##%::  +**#..
-    +*#%%%%%%%%%%%%%%%%%%++
-     =+*#...*##%::..+*##..
-      +*#   *##%   +**#..
-       +*#  **#%   +*##..
-       +*######%######+
-```
-
 <p align="center">
   <img src="assets/screenshot.jpg" alt="ORBYN running in a terminal" width="480" height="480">
 </p>
