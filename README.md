@@ -17,6 +17,10 @@ A blue AI wireframe orb that roams your terminal to prevent screen burn-in.
        +*######%######+
 ```
 
+<p align="center">
+  <img src="assets/screenshot.jpg" alt="ORBYN running in a terminal" width="480" height="480">
+</p>
+
 Zero dependencies, single static binary. Ultron/Jarvis-flavoured globe with
 bounce physics, spiky organic energy bursts, fading cmatrix-style trails, and
 roaming telemetry text, so no pixel stays lit long enough to burn in. Blue
