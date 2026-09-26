@@ -193,6 +193,34 @@ fn orb_cell(v: f32, ch: u8, mode: ColorMode) -> Cell {
     }
 }
 
+pub fn cells_for(grid: &Grid, visual: Visual, mode: ColorMode) -> Vec<Cell> {
+    grid.data
+        .iter()
+        .map(|cell| match visual {
+            Visual::Orb => orb_cell(cell.v, cell.ch, mode),
+            Visual::Carrion => carrion_cell(cell, mode),
+        })
+        .collect()
+}
+
+pub fn snapshot_ansi(cells: &[Cell], w: usize) -> Vec<u8> {
+    let mut out = Vec::with_capacity(cells.len() * 8);
+    let mut color = Color::Default;
+    for (i, cell) in cells.iter().enumerate() {
+        if i > 0 && w > 0 && i % w == 0 {
+            out.extend_from_slice(b"\x1b[0m\r\n");
+            color = Color::Default;
+        }
+        if cell.color != color {
+            push_sgr(cell.color, &mut out);
+            color = cell.color;
+        }
+        out.push(cell.ch as u8);
+    }
+    out.extend_from_slice(b"\x1b[0m\r\n");
+    out
+}
+
 pub struct Renderer {
     w: usize,
     prev: Vec<Cell>,
@@ -444,15 +472,7 @@ impl Terminal {
     }
 
     pub fn draw(&mut self, grid: &Grid) -> io::Result<()> {
-        self.cells.clear();
-        self.cells.reserve(grid.data.len());
-        for cell in &grid.data {
-            let out = match self.visual {
-                Visual::Orb => orb_cell(cell.v, cell.ch, self.mode),
-                Visual::Carrion => carrion_cell(cell, self.mode),
-            };
-            self.cells.push(out);
-        }
+        self.cells = cells_for(grid, self.visual, self.mode);
 
         let mut buf = Vec::with_capacity(1024);
         self.renderer.present(&self.cells, &mut buf);
@@ -620,6 +640,47 @@ mod tests {
         out.clear();
         push_u32(12345, &mut out);
         assert_eq!(out, b"12345");
+    }
+
+    #[test]
+    fn snapshot_ansi_writes_one_line_per_row() {
+        let cells = vec![
+            Cell {
+                ch: 'A',
+                color: Color::Rgb(1, 2, 3),
+            };
+            6
+        ];
+        let text = String::from_utf8(snapshot_ansi(&cells, 3)).expect("ascii output");
+        let rows: Vec<&str> = text.split("\r\n").collect();
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].matches('A').count(), 3);
+        assert_eq!(rows[1].matches('A').count(), 3);
+        assert!(text.contains("38;2;1;2;3"));
+        assert!(text.ends_with("\x1b[0m\r\n"));
+    }
+
+    #[test]
+    fn snapshot_ansi_blank_cells_emit_no_color() {
+        let text = String::from_utf8(snapshot_ansi(&[Cell::BLANK; 4], 2)).expect("ascii output");
+        assert!(!text.contains("38;"));
+    }
+
+    #[test]
+    fn snapshot_ansi_tolerates_zero_width() {
+        assert_eq!(snapshot_ansi(&[], 0), b"\x1b[0m\r\n");
+    }
+
+    #[test]
+    fn cells_for_matches_visual() {
+        let mut grid = Grid::new(2, 1);
+        grid.stamp(0, 0, 1.0);
+        let orb = cells_for(&grid, Visual::Orb, ColorMode::TrueColor);
+        let carrion = cells_for(&grid, Visual::Carrion, ColorMode::TrueColor);
+        assert_eq!(orb.len(), 2);
+        assert_eq!(carrion.len(), 2);
+        assert_eq!(orb[0].ch, '@');
+        assert_eq!(carrion[0].color, FLESH_RED);
     }
 
     fn lit(tone: Tone) -> crate::scene::Cell {

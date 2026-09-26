@@ -8,7 +8,8 @@ brain folds.
 > before relying on it.
 
 <p align="center">
-  <img src="assets/screenshot.jpg" alt="ORBYN running in a terminal" width="480" height="480">
+  <img src="assets/orb.gif" alt="ORBYN orb drifting in a terminal" width="420">
+  <img src="assets/carrion.gif" alt="ORBYN carrion creature drifting in a terminal" width="420">
 </p>
 
 Zero dependencies, single static binary. The default Ultron/Jarvis-flavoured
@@ -36,6 +37,17 @@ Keys: `q`/`Ctrl-C` quit, `space` pause, `h` toggle telemetry (orb) or body
 detail (carrion), `+`/`-` speed.
 Use a dark terminal theme. The terminal is restored on quit, panic, and
 `SIGTERM`/`SIGHUP`.
+
+## Samples
+
+`scripts/samples.sh` regenerates the GIFs above from fixed seeds using orbyn's
+headless `--cast` mode (single frames: `--snapshot`) and
+[agg](https://github.com/asciinema/agg):
+
+```sh
+cargo install --git https://github.com/asciinema/agg
+scripts/samples.sh
+```
 
 ## License
 

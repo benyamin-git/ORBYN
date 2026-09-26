@@ -1,4 +1,5 @@
 mod args;
+mod capture;
 mod carrion;
 mod globe;
 mod hud;
@@ -39,7 +40,12 @@ fn main() {
         }
     };
 
-    if let Err(err) = run(&cfg) {
+    let result = match &cfg.capture {
+        Some(capture) => capture::run(&cfg, capture),
+        None => run(&cfg),
+    };
+
+    if let Err(err) = result {
         eprintln!("orbyn: {err}");
         std::process::exit(1);
     }

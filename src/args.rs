@@ -1,8 +1,16 @@
+use std::path::PathBuf;
+
 use crate::term::{ColorMode, Visual};
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Capture {
+    Snapshot,
+    Cast(PathBuf),
+}
+
+#[derive(Clone, Debug)]
 pub struct Config {
     pub fps: u32,
     pub speed: f32,
@@ -12,6 +20,11 @@ pub struct Config {
     pub hud: u32,
     pub seed: Option<u64>,
     pub visual: Visual,
+    pub capture: Option<Capture>,
+    pub cols: Option<usize>,
+    pub rows: Option<usize>,
+    pub warmup: f32,
+    pub duration: f32,
 }
 
 impl Default for Config {
@@ -25,6 +38,11 @@ impl Default for Config {
             hud: 6,
             seed: None,
             visual: Visual::Orb,
+            capture: None,
+            cols: None,
+            rows: None,
+            warmup: 2.0,
+            duration: 6.0,
         }
     }
 }
@@ -47,6 +65,28 @@ impl Config {
         }
         if self.hud > 64 {
             return Err(format!("--hud must be 0-64, got {}", self.hud));
+        }
+        if let Some(cols) = self.cols {
+            if !(16..=500).contains(&cols) {
+                return Err(format!("--cols must be 16-500, got {cols}"));
+            }
+        }
+        if let Some(rows) = self.rows {
+            if !(6..=200).contains(&rows) {
+                return Err(format!("--rows must be 6-200, got {rows}"));
+            }
+        }
+        if !(0.0..=60.0).contains(&self.warmup) {
+            return Err(format!(
+                "--warmup must be 0-60 seconds, got {}",
+                self.warmup
+            ));
+        }
+        if !(0.1..=120.0).contains(&self.duration) {
+            return Err(format!(
+                "--duration must be 0.1-120 seconds, got {}",
+                self.duration
+            ));
         }
         Ok(())
     }
@@ -83,6 +123,14 @@ OPTIONS:
     -h, --help            Print this help
     -V, --version         Print version
 
+CAPTURE (headless, no TTY required):
+        --snapshot        Render one frame to stdout and exit
+        --cast <FILE>     Write an asciinema v2 recording to FILE
+        --cols <N>        Capture width in columns [default: 100]
+        --rows <N>        Capture height in rows [default: 30]
+        --warmup <SECS>   Simulated settle time before capture [default: 2.0]
+        --duration <SECS> Captured length in seconds [default: 6.0]
+
 KEYS:
     q, Ctrl-C   quit
     space       pause
@@ -112,6 +160,10 @@ where
                 cfg.hud = 0;
                 continue;
             }
+            "--snapshot" => {
+                set_capture(&mut cfg, Capture::Snapshot)?;
+                continue;
+            }
             "-carrion" | "--carrion" => {
                 cfg.visual = Visual::Carrion;
                 continue;
@@ -138,12 +190,30 @@ where
             "--color" => cfg.color = ColorMode::parse(&value)?,
             "--hud" => cfg.hud = parse_u32(&name, &value)?,
             "--seed" => cfg.seed = Some(parse_u64(&name, &value)?),
+            "--cast" => {
+                if value.is_empty() {
+                    return Err("--cast requires a non-empty file path".to_string());
+                }
+                set_capture(&mut cfg, Capture::Cast(PathBuf::from(value)))?;
+            }
+            "--cols" => cfg.cols = Some(parse_usize(&name, &value)?),
+            "--rows" => cfg.rows = Some(parse_usize(&name, &value)?),
+            "--warmup" => cfg.warmup = parse_f32(&name, &value)?,
+            "--duration" => cfg.duration = parse_f32(&name, &value)?,
             _ => return Err(format!("unknown option '{name}'")),
         }
     }
 
     cfg.validate()?;
     Ok(Action::Run(cfg))
+}
+
+fn set_capture(cfg: &mut Config, capture: Capture) -> Result<(), String> {
+    if cfg.capture.is_some() {
+        return Err("--snapshot and --cast cannot be combined".to_string());
+    }
+    cfg.capture = Some(capture);
+    Ok(())
 }
 
 fn parse_f32(name: &str, value: &str) -> Result<f32, String> {
@@ -159,6 +229,12 @@ fn parse_u32(name: &str, value: &str) -> Result<u32, String> {
 }
 
 fn parse_u64(name: &str, value: &str) -> Result<u64, String> {
+    value
+        .parse()
+        .map_err(|_| format!("invalid value '{value}' for {name}"))
+}
+
+fn parse_usize(name: &str, value: &str) -> Result<usize, String> {
     value
         .parse()
         .map_err(|_| format!("invalid value '{value}' for {name}"))
@@ -189,6 +265,11 @@ mod tests {
         assert!(cfg.size.is_none());
         assert!(cfg.seed.is_none());
         assert_eq!(cfg.color, ColorMode::Auto);
+        assert!(cfg.capture.is_none());
+        assert!(cfg.cols.is_none());
+        assert!(cfg.rows.is_none());
+        assert_eq!(cfg.warmup, 2.0);
+        assert_eq!(cfg.duration, 6.0);
     }
 
     #[test]
@@ -265,5 +346,55 @@ mod tests {
         assert!(text.contains("orbyn"));
         assert!(text.contains("--fps"));
         assert!(text.contains("Ctrl-C"));
+    }
+
+    #[test]
+    fn capture_flags_parse() {
+        let cfg = config(&[
+            "--snapshot",
+            "--cols",
+            "120",
+            "--rows",
+            "40",
+            "--warmup",
+            "1.5",
+            "--duration",
+            "3",
+        ]);
+        assert_eq!(cfg.capture, Some(Capture::Snapshot));
+        assert_eq!(cfg.cols, Some(120));
+        assert_eq!(cfg.rows, Some(40));
+        assert_eq!(cfg.warmup, 1.5);
+        assert_eq!(cfg.duration, 3.0);
+    }
+
+    #[test]
+    fn cast_flag_takes_path_in_both_forms() {
+        let expected = Some(Capture::Cast(PathBuf::from("out.cast")));
+        assert_eq!(config(&["--cast", "out.cast"]).capture, expected);
+        assert_eq!(config(&["--cast=out.cast"]).capture, expected);
+    }
+
+    #[test]
+    fn capture_flags_are_validated() {
+        assert!(run(&["--snapshot", "--cast", "x.cast"]).is_err());
+        assert!(run(&["--cast", "x.cast", "--snapshot"]).is_err());
+        assert!(run(&["--cast", ""]).is_err());
+        assert!(run(&["--cast"]).is_err());
+        assert!(run(&["--cols", "8"]).is_err());
+        assert!(run(&["--cols", "abc"]).is_err());
+        assert!(run(&["--rows", "300"]).is_err());
+        assert!(run(&["--warmup", "99"]).is_err());
+        assert!(run(&["--duration", "0"]).is_err());
+        assert!(run(&["--snapshot"]).is_ok());
+        assert!(run(&["--cast", "x.cast"]).is_ok());
+    }
+
+    #[test]
+    fn usage_documents_capture_flags() {
+        let text = usage();
+        assert!(text.contains("--snapshot"));
+        assert!(text.contains("--cast"));
+        assert!(text.contains("--warmup"));
     }
 }
