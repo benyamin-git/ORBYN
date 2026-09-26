@@ -68,10 +68,11 @@ fn record(
          \"env\":{{\"TERM\":\"xterm-256color\",\"COLORTERM\":\"truecolor\"}}}}"
     )?;
 
+    write_event(out, 0.0, b"\x1b[?25l")?;
+
     let mut renderer = Renderer::new();
     renderer.reset(w, h);
     let mut diff = Vec::with_capacity(8192);
-    let mut line = String::with_capacity(16384);
 
     for i in 0..frames(cfg.duration, cfg.fps).max(1) {
         sim.update(dt, w, h);
@@ -81,15 +82,19 @@ fn record(
         if diff.is_empty() {
             continue;
         }
-        line.clear();
-        line.push('[');
-        line.push_str(&format!("{:.4}", i as f64 / cfg.fps as f64));
-        line.push_str(",\"o\",\"");
-        escape_json(&diff, &mut line);
-        line.push_str("\"]");
-        writeln!(out, "{line}")?;
+        write_event(out, i as f64 / cfg.fps as f64, &diff)?;
     }
     Ok(())
+}
+
+fn write_event(out: &mut impl Write, t: f64, payload: &[u8]) -> io::Result<()> {
+    let mut line = String::with_capacity(payload.len() + 32);
+    line.push('[');
+    line.push_str(&format!("{t:.4}"));
+    line.push_str(",\"o\",\"");
+    escape_json(payload, &mut line);
+    line.push_str("\"]");
+    writeln!(out, "{line}")
 }
 
 fn escape_json(bytes: &[u8], out: &mut String) {
@@ -160,9 +165,11 @@ mod tests {
         assert!(header.contains("\"height\":12"));
         assert!(header.contains("COLORTERM"));
 
+        assert!(text.contains("\\u001b[?25l"));
+
         let events: Vec<&str> = lines.collect();
         assert!(!events.is_empty());
-        assert!(events.len() <= 10);
+        assert!(events.len() <= 11);
         for event in events {
             assert!(event.starts_with('['));
             assert!(event.contains(",\"o\",\""));

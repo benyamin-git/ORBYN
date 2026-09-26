@@ -12,6 +12,9 @@ brain folds.
   <img src="assets/carrion.gif" alt="ORBYN carrion creature drifting in a terminal" width="420">
 </p>
 
+> These GIFs are automatically captured from the headless renderer and lossily
+> compressed; the real thing looks much, much better.
+
 Zero dependencies, single static binary. The default Ultron/Jarvis-flavoured
 globe has bounce physics, spiky organic energy bursts, fading cmatrix-style
 trails, and roaming telemetry text; `-carrion` swaps it for a red flesh

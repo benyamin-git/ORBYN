@@ -13,9 +13,10 @@ cd "$(dirname "$0")/.."
 COLS="${COLS:-80}"
 ROWS="${ROWS:-30}"
 FPS="${FPS:-20}"
-WARMUP="${WARMUP:-2.0}"
-DURATION="${DURATION:-4.0}"
-SIZE="${SIZE:-10}"
+WARMUP="${WARMUP:-3.0}"
+DURATION="${DURATION:-5.0}"
+SIZE_ORB="${SIZE_ORB:-7}"
+SIZE_CARRION="${SIZE_CARRION:-10}"
 FONT_SIZE="${FONT_SIZE:-12}"
 SEED_ORB="${SEED_ORB:-7}"
 SEED_CARRION="${SEED_CARRION:-11}"
@@ -35,19 +36,19 @@ mkdir -p target/samples assets
 BIN=target/release/orbyn
 
 capture() {
-    local name="$1" seed="$2"
-    shift 2
+    local name="$1" seed="$2" size="$3"
+    shift 3
     local cast="target/samples/$name.cast"
     local gif="assets/$name.gif"
 
     "$BIN" --seed "$seed" --cols "$COLS" --rows "$ROWS" --fps "$FPS" \
         --warmup "$WARMUP" --duration "$DURATION" --color truecolor \
-        --size "$SIZE" --cast "$cast" "$@"
+        --size "$size" --cast "$cast" "$@"
     agg -q --theme "$THEME" --font-size "$FONT_SIZE" --fps-cap "$FPS" \
         --last-frame-duration 1 "$cast" "$gif"
 
     printf 'wrote %s (%s)\n' "$gif" "$(du -h "$gif" | cut -f1)"
 }
 
-capture orb "$SEED_ORB"
-capture carrion "$SEED_CARRION" --carrion
+capture orb "$SEED_ORB" "$SIZE_ORB"
+capture carrion "$SEED_CARRION" "$SIZE_CARRION" --carrion
