@@ -4,7 +4,13 @@ use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
 
-use crate::scene::{Grid, CUTOFF};
+use crate::scene::{Grid, Tone, CUTOFF};
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Visual {
+    Orb,
+    Carrion,
+}
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ColorMode {
@@ -128,6 +134,63 @@ fn indexed_code(v: f32) -> u8 {
     let (r, g, b) = rgb(v);
     let q = |c: u8| ((c as u16 * 5) / 255) as u8;
     16 + 36 * q(r) + 6 * q(g) + q(b)
+}
+
+pub const FLESH_RED: Color = Color::Rgb(150, 14, 14);
+pub const GROOVE_GREY: Color = Color::Rgb(40, 38, 38);
+
+pub const FLESH_CH: char = '#';
+pub const GROOVE_CH: char = '=';
+pub const GORE_CH: char = '-';
+
+fn flesh_color(mode: ColorMode) -> Color {
+    match mode {
+        ColorMode::Mono => Color::Default,
+        ColorMode::Ansi16 => Color::Basic(31),
+        ColorMode::Ansi256 => Color::Indexed(88),
+        ColorMode::TrueColor | ColorMode::Auto => FLESH_RED,
+    }
+}
+
+fn groove_color(mode: ColorMode) -> Color {
+    match mode {
+        ColorMode::Mono => Color::Default,
+        ColorMode::Ansi16 => Color::Basic(90),
+        ColorMode::Ansi256 => Color::Indexed(235),
+        ColorMode::TrueColor | ColorMode::Auto => GROOVE_GREY,
+    }
+}
+
+fn carrion_cell(cell: &crate::scene::Cell, mode: ColorMode) -> Cell {
+    if cell.v <= 0.0 && cell.tone == Tone::Blank {
+        return Cell::BLANK;
+    }
+    let tone = if cell.tone == Tone::Blank {
+        Tone::Flesh
+    } else {
+        cell.tone
+    };
+    let (default_ch, color) = match tone {
+        Tone::Groove => (GROOVE_CH, groove_color(mode)),
+        Tone::Gore => (GORE_CH, flesh_color(mode)),
+        Tone::Blank | Tone::Flesh => (FLESH_CH, flesh_color(mode)),
+    };
+    let ch = if cell.ch == 0 {
+        default_ch
+    } else {
+        cell.ch as char
+    };
+    Cell { ch, color }
+}
+
+fn orb_cell(v: f32, ch: u8, mode: ColorMode) -> Cell {
+    if v <= 0.0 || (v <= CUTOFF && ch == 0) {
+        Cell::BLANK
+    } else {
+        let (ramp_ch, color) = shade(v, mode);
+        let ch = if ch == 0 { ramp_ch } else { ch as char };
+        Cell { ch, color }
+    }
 }
 
 pub struct Renderer {
@@ -326,6 +389,7 @@ fn tty_cmd(args: &[&str]) -> Option<String> {
 
 pub struct Terminal {
     mode: ColorMode,
+    visual: Visual,
     renderer: Renderer,
     cells: Vec<Cell>,
     w: usize,
@@ -335,7 +399,7 @@ pub struct Terminal {
 }
 
 impl Terminal {
-    pub fn new(mode: ColorMode) -> Self {
+    pub fn new(mode: ColorMode, visual: Visual) -> Self {
         install_signal_handlers();
         let interactive = io::stdin().is_terminal() && io::stdout().is_terminal();
         let saved_stty = if interactive { tty_cmd(&["-g"]) } else { None };
@@ -344,7 +408,11 @@ impl Terminal {
         }
 
         let mut stdout = io::stdout();
-        let _ = stdout.write_all(b"\x1b[?1049h\x1b[?25l\x1b[2J\x1b[H\x1b]0;ORBYN\x1b\\");
+        let title: &[u8] = match visual {
+            Visual::Orb => b"\x1b[?1049h\x1b[?25l\x1b[2J\x1b[H\x1b]0;ORBYN\x1b\\",
+            Visual::Carrion => b"\x1b[?1049h\x1b[?25l\x1b[2J\x1b[H\x1b]0;ORBYN // CARRION\x1b\\",
+        };
+        let _ = stdout.write_all(title);
         let _ = stdout.flush();
 
         let (w, h) = window_size();
@@ -352,6 +420,7 @@ impl Terminal {
         renderer.reset(w, h);
         Self {
             mode,
+            visual,
             renderer,
             cells: Vec::new(),
             w,
@@ -378,16 +447,9 @@ impl Terminal {
         self.cells.clear();
         self.cells.reserve(grid.data.len());
         for cell in &grid.data {
-            let out = if cell.v <= 0.0 || (cell.v <= CUTOFF && cell.ch == 0) {
-                Cell::BLANK
-            } else {
-                let (ramp_ch, color) = shade(cell.v, self.mode);
-                let ch = if cell.ch == 0 {
-                    ramp_ch
-                } else {
-                    cell.ch as char
-                };
-                Cell { ch, color }
+            let out = match self.visual {
+                Visual::Orb => orb_cell(cell.v, cell.ch, self.mode),
+                Visual::Carrion => carrion_cell(cell, self.mode),
             };
             self.cells.push(out);
         }
@@ -558,5 +620,97 @@ mod tests {
         out.clear();
         push_u32(12345, &mut out);
         assert_eq!(out, b"12345");
+    }
+
+    fn lit(tone: Tone) -> crate::scene::Cell {
+        crate::scene::Cell {
+            v: 1.0,
+            ch: 0,
+            tone,
+        }
+    }
+
+    #[test]
+    fn carrion_flesh_is_red_and_groove_is_grey() {
+        let flesh = carrion_cell(&lit(Tone::Flesh), ColorMode::TrueColor);
+        let groove = carrion_cell(&lit(Tone::Groove), ColorMode::TrueColor);
+        let gore = carrion_cell(&lit(Tone::Gore), ColorMode::TrueColor);
+        assert_eq!(flesh.color, FLESH_RED);
+        assert_eq!(groove.color, GROOVE_GREY);
+        assert_eq!(gore.color, FLESH_RED);
+        assert_ne!(groove.color, flesh.color);
+        assert_ne!(groove.color, Color::Rgb(150, 14, 14));
+    }
+
+    #[test]
+    fn carrion_resolves_only_two_colors_in_every_mode() {
+        let tones = [Tone::Blank, Tone::Flesh, Tone::Groove, Tone::Gore];
+        for mode in [
+            ColorMode::TrueColor,
+            ColorMode::Ansi256,
+            ColorMode::Ansi16,
+            ColorMode::Mono,
+        ] {
+            for tone in tones {
+                for step in 0..=10 {
+                    let cell = crate::scene::Cell {
+                        v: step as f32 / 10.0,
+                        ch: 0,
+                        tone,
+                    };
+                    let out = carrion_cell(&cell, mode);
+                    match mode {
+                        ColorMode::TrueColor | ColorMode::Auto => {
+                            assert!(matches!(
+                                out.color,
+                                Color::Default | FLESH_RED | GROOVE_GREY
+                            ));
+                        }
+                        ColorMode::Ansi256 => {
+                            assert!(matches!(
+                                out.color,
+                                Color::Default | Color::Indexed(88) | Color::Indexed(235)
+                            ));
+                        }
+                        ColorMode::Ansi16 => {
+                            assert!(matches!(
+                                out.color,
+                                Color::Default | Color::Basic(31) | Color::Basic(90)
+                            ));
+                        }
+                        ColorMode::Mono => assert_eq!(out.color, Color::Default),
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn carrion_glyphs_distinguish_tone_in_mono() {
+        let flesh = carrion_cell(&lit(Tone::Flesh), ColorMode::Mono);
+        let groove = carrion_cell(&lit(Tone::Groove), ColorMode::Mono);
+        let gore = carrion_cell(&lit(Tone::Gore), ColorMode::Mono);
+        assert_eq!(flesh.ch, FLESH_CH);
+        assert_eq!(groove.ch, GROOVE_CH);
+        assert_eq!(gore.ch, GORE_CH);
+        assert_ne!(flesh.ch, groove.ch);
+    }
+
+    #[test]
+    fn carrion_lit_untinted_cell_reads_as_flesh() {
+        let cell = crate::scene::Cell {
+            v: 0.6,
+            ch: b'X',
+            tone: Tone::Blank,
+        };
+        let out = carrion_cell(&cell, ColorMode::TrueColor);
+        assert_eq!(out.ch, 'X');
+        assert_eq!(out.color, FLESH_RED);
+    }
+
+    #[test]
+    fn carrion_blank_cell_stays_blank() {
+        let out = carrion_cell(&crate::scene::Cell::EMPTY, ColorMode::TrueColor);
+        assert_eq!(out, Cell::BLANK);
     }
 }

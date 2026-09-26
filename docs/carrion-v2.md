@@ -185,3 +185,27 @@ The v1 attempt lives on branch `carrion-softbody-v1`. Useful to look at:
 the movement/state machine, the `-carrion` arg wiring, the HUD flavor, and the
 overall silhouette. **Do not** copy its palette approach or its accumulated
 constraint/safety-net machinery.
+
+## 9. v2 implementation notes
+
+Built on branch `carrion-v2`:
+
+- `scene::Tone` (`Blank`/`Flesh`/`Groove`/`Gore`) is carried on `Cell`;
+  `term::carrion_cell` resolves tones to exactly two colors per color mode and
+  `term::Visual` selects the title and render path.
+- The body is 14 ring nodes on springs toward teardrop slots around a hub, with
+  a rate-limited `body_heading` so the visual frame never outruns the nodes.
+  Rendering is a two-pass boolean mask over the body bbox; the outermost
+  covered cell is always flesh, so grooves can never touch the silhouette.
+- Crawl/Grip/Lunge is timer-driven. The lunge aims away from the gripped wall,
+  and heading turns at a limited rate while the body trails the hub, so the
+  ring cannot shear through its own center.
+- A 16-slot shed pool fades by glyph density (`#+.-`), never by a third color.
+  `--trail` controls gore lifetime. (The first v2 pass had latching tendrils
+  and a trailing bundle; both were removed as too busy.)
+- Dirty-rect clearing and a reused mask buffer; no per-frame allocations in the
+  hot path.
+
+v1 traps addressed: colors decided independently of any ramp, grooves rotate
+with the body, resize recomputes radius, no teleporting safety-nets, bounded
+noise time, and wall rays target the real screen bounds.

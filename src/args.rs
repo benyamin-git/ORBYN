@@ -1,4 +1,4 @@
-use crate::term::ColorMode;
+use crate::term::{ColorMode, Visual};
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -11,6 +11,7 @@ pub struct Config {
     pub color: ColorMode,
     pub hud: u32,
     pub seed: Option<u64>,
+    pub visual: Visual,
 }
 
 impl Default for Config {
@@ -23,6 +24,7 @@ impl Default for Config {
             color: ColorMode::Auto,
             hud: 6,
             seed: None,
+            visual: Visual::Orb,
         }
     }
 }
@@ -60,15 +62,19 @@ pub fn usage() -> String {
     format!(
         "\
 ORBYN {VERSION}
-A blue AI wireframe orb that roams your terminal to stop screen burn-in.
+Screensaver creatures that roam your terminal to stop screen burn-in.
 
 USAGE:
     orbyn [OPTIONS]
 
+MODES:
+        (default)         Blue wireframe orb
+    -carrion, --carrion   Red flesh creature with dark brain folds
+
 OPTIONS:
     -s, --speed <FLOAT>   Motion speed multiplier [default: 1.0]
         --fps <N>         Frames per second, 1-240 [default: 30]
-        --size <ROWS>     Globe radius in text rows [default: auto]
+        --size <ROWS>     Body radius in text rows [default: auto]
         --trail <FLOAT>   Trail persistence, 0.0-0.97, higher = longer glow [default: 0.82]
         --color <MODE>    auto, truecolor, 256, 16, mono [default: auto]
         --hud <N>         Drifting telemetry fragments, 0-64 [default: 6]
@@ -80,7 +86,7 @@ OPTIONS:
 KEYS:
     q, Ctrl-C   quit
     space       pause
-    h           toggle telemetry
+    h           toggle telemetry (orb) / body detail (carrion)
     +, -        speed up / slow down
 "
     )
@@ -104,6 +110,10 @@ where
             "-V" | "--version" => return Ok(Action::Version),
             "--no-hud" => {
                 cfg.hud = 0;
+                continue;
+            }
+            "-carrion" | "--carrion" => {
+                cfg.visual = Visual::Carrion;
                 continue;
             }
             _ => {}
@@ -210,6 +220,21 @@ mod tests {
     #[test]
     fn no_hud_sets_zero() {
         assert_eq!(config(&["--no-hud"]).hud, 0);
+    }
+
+    #[test]
+    fn visual_defaults_to_orb() {
+        assert_eq!(config(&[]).visual, Visual::Orb);
+    }
+
+    #[test]
+    fn carrion_flag_parses_in_both_forms() {
+        assert_eq!(config(&["-carrion"]).visual, Visual::Carrion);
+        assert_eq!(config(&["--carrion"]).visual, Visual::Carrion);
+        let cfg = config(&["--carrion", "--fps", "60", "--seed", "4"]);
+        assert_eq!(cfg.visual, Visual::Carrion);
+        assert_eq!(cfg.fps, 60);
+        assert_eq!(cfg.seed, Some(4));
     }
 
     #[test]
