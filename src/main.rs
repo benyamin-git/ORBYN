@@ -4,6 +4,7 @@ mod capture;
 mod carrion;
 mod globe;
 mod hud;
+mod menu;
 mod rng;
 mod rotation;
 mod scene;
