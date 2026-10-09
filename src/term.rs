@@ -223,7 +223,8 @@ pub fn snapshot_ansi(cells: &[Cell], w: usize) -> Vec<u8> {
             push_sgr(cell.color, &mut out);
             color = cell.color;
         }
-        out.push(cell.ch as u8);
+        let mut utf8 = [0u8; 4];
+        out.extend_from_slice(cell.ch.encode_utf8(&mut utf8).as_bytes());
     }
     out.extend_from_slice(b"\x1b[0m\r\n");
     out
@@ -277,7 +278,8 @@ impl Renderer {
                 push_sgr(cell.color, out);
                 self.color = cell.color;
             }
-            out.push(cell.ch as u8);
+            let mut utf8 = [0u8; 4];
+            out.extend_from_slice(cell.ch.encode_utf8(&mut utf8).as_bytes());
             self.cursor = if col as usize == self.w {
                 None
             } else {
@@ -654,6 +656,19 @@ mod tests {
     }
 
     #[test]
+    fn renderer_encodes_non_ascii_glyphs_as_utf8() {
+        let mut renderer = Renderer::new();
+        renderer.reset(1, 1);
+        let cells = vec![Cell {
+            ch: '▪',
+            color: Color::Default,
+        }];
+        let mut out = Vec::new();
+        renderer.present(&cells, &mut out);
+        assert!(out.windows(3).any(|window| window == [0xE2, 0x96, 0xAA]));
+    }
+
+    #[test]
     fn renderer_reset_drops_shadow_state() {
         let mut renderer = Renderer::new();
         renderer.reset(2, 2);
@@ -696,6 +711,16 @@ mod tests {
         assert_eq!(rows[1].matches('A').count(), 3);
         assert!(text.contains("38;2;1;2;3"));
         assert!(text.ends_with("\x1b[0m\r\n"));
+    }
+
+    #[test]
+    fn snapshot_ansi_encodes_non_ascii_glyphs_as_utf8() {
+        let cells = vec![Cell {
+            ch: '─',
+            color: Color::Default,
+        }];
+        let out = snapshot_ansi(&cells, 1);
+        assert!(out.windows(3).any(|window| window == [0xE2, 0x94, 0x80]));
     }
 
     #[test]
