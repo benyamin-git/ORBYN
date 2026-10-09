@@ -53,14 +53,30 @@ fn main() {
     }
 }
 
+fn swap_to(sim: &mut Sim, next: Being, c: &Config, w: usize, h: usize, session_paused: bool) {
+    *sim = Sim::new(next, c, w, h);
+    if session_paused {
+        sim.toggle_pause();
+    }
+    if sim.paused() {
+        sim.update(0.0, w, h);
+    }
+}
+
 fn run(cfg: &Config) -> std::io::Result<()> {
     let mode = term::resolve(cfg.color);
-    let being = cfg.being.unwrap_or(Being::Orb);
-    let mut terminal = Terminal::new(mode, being);
+    let rotation = rotation::rotation_for(cfg);
+    let mut current_kind = rotation::resolve_start_kind(cfg.being, rotation.as_ref());
+    let mut terminal = Terminal::new(mode, current_kind);
     let events = term::input_events();
 
     let (mut w, mut h) = terminal.sync()?;
-    let mut sim = Sim::new(being, cfg, w, h);
+    let mut sim = Sim::new(current_kind, cfg, w, h);
+    let mut session_speed = cfg.speed;
+    let session_trail = cfg.trail;
+    let mut session_paused = false;
+    let mut elapsed = 0.0f32;
+    let interval = rotation.as_ref().and_then(|r| r.interval);
     let frame = Duration::from_secs_f32(1.0 / cfg.fps as f32);
     let mut last = Instant::now();
 
@@ -70,6 +86,7 @@ fn run(cfg: &Config) -> std::io::Result<()> {
         last = frame_start;
 
         let mut quit = false;
+        let mut manual = false;
         while let Ok(event) = events.try_recv() {
             match event {
                 Event::Eof => {
@@ -81,16 +98,43 @@ fn run(cfg: &Config) -> std::io::Result<()> {
                         quit = true;
                         break;
                     }
-                    b' ' => sim.toggle_pause(),
+                    b' ' => {
+                        sim.toggle_pause();
+                        session_paused = !session_paused;
+                    }
                     b'h' | b'H' => sim.toggle_overlay(),
-                    b'+' | b'=' => sim.adjust_speed(1.15),
-                    b'-' | b'_' => sim.adjust_speed(1.0 / 1.15),
+                    b'+' | b'=' => {
+                        session_speed = (session_speed * 1.15).clamp(0.05, 20.0);
+                        sim.adjust_speed(1.15);
+                    }
+                    b'-' | b'_' => {
+                        session_speed = (session_speed * (1.0 / 1.15)).clamp(0.05, 20.0);
+                        sim.adjust_speed(1.0 / 1.15);
+                    }
+                    b'n' | b'N' => manual = true,
                     _ => {}
                 },
             }
         }
         if quit {
             break;
+        }
+
+        elapsed += dt;
+        if manual || rotation::swap_due(elapsed, interval) {
+            let list: Vec<Being> = rotation
+                .as_ref()
+                .map(|r| r.list.clone())
+                .unwrap_or_else(|| Being::all().to_vec());
+            if let Some(next) = rotation::next_after(&list, current_kind) {
+                let mut c = cfg.clone();
+                c.speed = session_speed;
+                c.trail = session_trail;
+                swap_to(&mut sim, next, &c, w, h, session_paused);
+                current_kind = next;
+                elapsed = 0.0;
+                terminal.set_title(current_kind);
+            }
         }
 
         let (new_w, new_h) = terminal.sync()?;
@@ -108,9 +152,9 @@ fn run(cfg: &Config) -> std::io::Result<()> {
 
         terminal.draw(sim.grid())?;
 
-        let elapsed = frame_start.elapsed();
-        if elapsed < frame {
-            std::thread::sleep(frame - elapsed);
+        let frame_elapsed = frame_start.elapsed();
+        if frame_elapsed < frame {
+            std::thread::sleep(frame - frame_elapsed);
         }
     }
 
@@ -429,5 +473,163 @@ mod tests {
         assert_eq!(app.hud.count(), 0);
         app.toggle_hud();
         assert_eq!(app.hud.count(), cfg.hud as usize);
+    }
+
+    fn playlist_cfg() -> Config {
+        Config {
+            seed: Some(7),
+            playlist: Some(vec![Being::Orb, Being::Carrion]),
+            rotate: Some(60.0),
+            ..Config::default()
+        }
+    }
+
+    #[test]
+    fn n_swap_builds_next_being_and_paused_priming_lights_every_being() {
+        let cfg = playlist_cfg();
+        let rotation = rotation::rotation_for(&cfg).expect("rotation");
+        let (w, h) = (40, 12);
+        let start = rotation::resolve_start_kind(cfg.being, Some(&rotation));
+        assert_eq!(start, Being::Orb);
+        let next = rotation::next_after(&rotation.list, start).expect("next");
+        assert_eq!(next, Being::Carrion);
+
+        let mut sim = Sim::new(start, &cfg, w, h);
+        let mut c = cfg.clone();
+        c.speed = 0.5;
+        c.trail = 0.5;
+        swap_to(&mut sim, next, &c, w, h, true);
+        assert!(matches!(sim, Sim::Carrion(_)));
+        assert!(sim.paused());
+        assert!(sim.grid().data.iter().any(|cell| cell.v > 0.0));
+
+        for being in Being::all() {
+            let mut primed = Sim::new(being, &cfg, w, h);
+            swap_to(&mut primed, being, &cfg, w, h, true);
+            assert!(primed.paused(), "{being:?} did not stay paused");
+            assert!(
+                primed.grid().data.iter().any(|cell| cell.v > 0.0),
+                "{being:?} blank after primed swap"
+            );
+        }
+    }
+
+    #[test]
+    fn timer_swap_advances_being_when_due_and_stays_put_before() {
+        let cfg = Config {
+            seed: Some(7),
+            playlist: Some(vec![Being::Orb, Being::Carrion]),
+            rotate: Some(2.0),
+            ..Config::default()
+        };
+        let rotation = rotation::rotation_for(&cfg).expect("rotation");
+        let interval = rotation.interval;
+        assert_eq!(interval, Some(2.0));
+        let (w, h) = (40, 12);
+        let mut current = rotation::resolve_start_kind(cfg.being, Some(&rotation));
+        let mut sim = Sim::new(current, &cfg, w, h);
+        let dt = 1.0 / 30.0;
+        let mut elapsed = 1.98;
+
+        assert!(!rotation::swap_due(elapsed, interval));
+        elapsed += dt;
+        if rotation::swap_due(elapsed, interval) {
+            let next = rotation::next_after(&rotation.list, current).expect("next");
+            swap_to(&mut sim, next, &cfg, w, h, false);
+            current = next;
+            elapsed = 0.0;
+        }
+        assert_eq!(current, Being::Carrion);
+        assert!(matches!(sim, Sim::Carrion(_)));
+        assert_eq!(elapsed, 0.0);
+        assert!(!rotation::swap_due(dt, Some(60.0)));
+    }
+
+    #[test]
+    fn speed_adjustment_carries_into_swap_config_and_new_sim() {
+        let cfg = Config {
+            seed: Some(7),
+            speed: 1.0,
+            trail: 0.82,
+            ..Config::default()
+        };
+        let (w, h) = (40, 12);
+        let mut sim = Sim::new(Being::Orb, &cfg, w, h);
+        let mut session_speed = cfg.speed;
+        let ratio = 2.0;
+        session_speed = (session_speed * ratio).clamp(0.05, 20.0);
+        sim.adjust_speed(ratio);
+        assert!((session_speed - 2.0).abs() < 1e-6);
+
+        let mut c = cfg.clone();
+        c.speed = session_speed;
+        c.trail = cfg.trail;
+        assert_eq!(c.speed, session_speed);
+
+        let fresh = Sim::new(Being::Orb, &c, w, h);
+        match &fresh {
+            Sim::Orb(app) => assert!((app.speed - session_speed).abs() < 1e-6),
+            Sim::Carrion(_) => panic!("expected orb"),
+        }
+
+        swap_to(&mut sim, Being::Carrion, &c, w, h, false);
+        assert!(matches!(sim, Sim::Carrion(_)));
+    }
+
+    #[test]
+    fn resolve_start_kind_drives_initial_sim() {
+        let explicit = Config {
+            seed: Some(7),
+            being: Some(Being::Carrion),
+            ..Config::default()
+        };
+        let start = rotation::resolve_start_kind(
+            explicit.being,
+            rotation::rotation_for(&explicit).as_ref(),
+        );
+        assert!(matches!(
+            Sim::new(start, &explicit, 40, 12),
+            Sim::Carrion(_)
+        ));
+
+        let playlist = Config {
+            seed: Some(7),
+            playlist: Some(vec![Being::Carrion]),
+            ..Config::default()
+        };
+        let rotation = rotation::rotation_for(&playlist);
+        let start = rotation::resolve_start_kind(playlist.being, rotation.as_ref());
+        assert_eq!(start, Being::Carrion);
+        assert!(matches!(
+            Sim::new(start, &playlist, 40, 12),
+            Sim::Carrion(_)
+        ));
+
+        let bare = Config {
+            seed: Some(7),
+            ..Config::default()
+        };
+        let start =
+            rotation::resolve_start_kind(bare.being, rotation::rotation_for(&bare).as_ref());
+        assert_eq!(start, Being::Orb);
+        assert!(matches!(Sim::new(start, &bare, 40, 12), Sim::Orb(_)));
+    }
+
+    #[test]
+    fn n_cycles_all_when_no_rotation() {
+        let cfg = Config {
+            seed: Some(7),
+            ..Config::default()
+        };
+        let rotation = rotation::rotation_for(&cfg);
+        assert!(rotation.is_none());
+        let list = Being::all().to_vec();
+        let current = rotation::resolve_start_kind(cfg.being, rotation.as_ref());
+        assert_eq!(current, Being::Orb);
+        let next = rotation::next_after(&list, current).expect("next");
+        assert_eq!(next, Being::Carrion);
+        let mut sim = Sim::new(current, &cfg, 40, 12);
+        swap_to(&mut sim, next, &cfg, 40, 12, false);
+        assert!(matches!(sim, Sim::Carrion(_)));
     }
 }

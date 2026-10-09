@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use crate::args::Config;
 use crate::being::Being;
 
