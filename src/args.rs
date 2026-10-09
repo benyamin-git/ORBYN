@@ -21,6 +21,9 @@ pub struct Config {
     pub hud: u32,
     pub seed: Option<u64>,
     pub being: Option<Being>,
+    pub playlist: Option<Vec<Being>>,
+    pub rotate: Option<f32>,
+    pub run: bool,
     pub capture: Option<Capture>,
     pub cols: Option<usize>,
     pub rows: Option<usize>,
@@ -39,6 +42,9 @@ impl Default for Config {
             hud: 6,
             seed: None,
             being: None,
+            playlist: None,
+            rotate: None,
+            run: false,
             capture: None,
             cols: None,
             rows: None,
@@ -49,7 +55,7 @@ impl Default for Config {
 }
 
 impl Config {
-    fn validate(&self) -> Result<(), String> {
+    fn validate(&mut self) -> Result<(), String> {
         if !(1..=240).contains(&self.fps) {
             return Err(format!("--fps must be 1-240, got {}", self.fps));
         }
@@ -89,10 +95,27 @@ impl Config {
                 self.duration
             ));
         }
+        if self.being.is_some() && self.playlist.is_some() {
+            return Err("--mode and --playlist cannot be combined".to_string());
+        }
+        if (self.playlist.is_some() || self.rotate.is_some()) && self.capture.is_some() {
+            return Err(
+                "--playlist and --rotate cannot be combined with --snapshot or --cast".to_string(),
+            );
+        }
+        if let Some(rotate) = self.rotate {
+            if rotate < 1.0 {
+                return Err(format!("--rotate must be ≥ 1 second, got {rotate}"));
+            }
+        }
+        if self.rotate.is_some() && self.playlist.is_none() {
+            self.playlist = Some(Being::all().to_vec());
+        }
         Ok(())
     }
 }
 
+#[derive(Debug)]
 pub enum Action {
     Run(Config),
     Help,
@@ -114,6 +137,12 @@ USAGE:
 MODES:
         (default)         {orb_desc}
     -{carrion_name}, --{carrion_name}   {carrion_desc}
+        --mode <NAME>     Start directly in a named mode
+
+ROTATION:
+        --playlist <NAMES> Modes to rotate through, comma-separated or 'all'
+        --rotate <SECS>   Seconds between rotation swaps [default: 300]
+        --run             Skip the menu and start immediately
 
 OPTIONS:
     -s, --speed <FLOAT>   Motion speed multiplier [default: 1.0]
@@ -144,6 +173,29 @@ KEYS:
     )
 }
 
+pub fn normalize_playlist(names: &str) -> Result<Vec<Being>, String> {
+    if names.eq_ignore_ascii_case("all") {
+        return Ok(Being::all().to_vec());
+    }
+    let mut out = Vec::new();
+    for raw in names.split(',') {
+        let name = raw.trim();
+        let being = Being::from_name(name).ok_or_else(|| format!("unknown mode '{name}'"))?;
+        if !out.contains(&being) {
+            out.push(being);
+        }
+    }
+    Ok(out)
+}
+
+#[allow(dead_code)]
+pub fn should_show_menu(cfg: &Config, stdin_tty: bool, stdout_tty: bool) -> bool {
+    if cfg.capture.is_some() {
+        return false;
+    }
+    stdin_tty && stdout_tty && !cfg.run && cfg.being.is_none() && cfg.playlist.is_none()
+}
+
 pub fn parse<I>(args: I) -> Result<Action, String>
 where
     I: IntoIterator<Item = String>,
@@ -166,6 +218,10 @@ where
             }
             "--snapshot" => {
                 set_capture(&mut cfg, Capture::Snapshot)?;
+                continue;
+            }
+            "--run" => {
+                cfg.run = true;
                 continue;
             }
             "-carrion" | "--carrion" => {
@@ -194,6 +250,13 @@ where
             "--color" => cfg.color = ColorMode::parse(&value)?,
             "--hud" => cfg.hud = parse_u32(&name, &value)?,
             "--seed" => cfg.seed = Some(parse_u64(&name, &value)?),
+            "--mode" => {
+                cfg.being = Some(
+                    Being::from_name(&value).ok_or_else(|| format!("unknown mode '{value}'"))?,
+                )
+            }
+            "--playlist" => cfg.playlist = Some(normalize_playlist(&value)?),
+            "--rotate" => cfg.rotate = Some(parse_f32(&name, &value)?),
             "--cast" => {
                 if value.is_empty() {
                     return Err("--cast requires a non-empty file path".to_string());
@@ -400,5 +463,86 @@ mod tests {
         assert!(text.contains("--snapshot"));
         assert!(text.contains("--cast"));
         assert!(text.contains("--warmup"));
+    }
+
+    #[test]
+    fn mode_flag_parses_and_rejects_unknown() {
+        assert_eq!(config(&["--mode", "carrion"]).being, Some(Being::Carrion));
+        assert_eq!(config(&["--mode=orb"]).being, Some(Being::Orb));
+        let err = run(&["--mode", "dragon"]).unwrap_err();
+        assert!(err.contains("dragon"), "error was {err}");
+    }
+
+    #[test]
+    fn playlist_flag_parses_matrix() {
+        assert_eq!(
+            config(&["--playlist", "orb,carrion"]).playlist,
+            Some(vec![Being::Orb, Being::Carrion])
+        );
+        assert_eq!(
+            config(&["--playlist", "all"]).playlist,
+            Some(Being::all().to_vec())
+        );
+        assert_eq!(
+            config(&["--playlist", "orb,orb,carrion"]).playlist,
+            Some(vec![Being::Orb, Being::Carrion])
+        );
+        let err = run(&["--playlist", "dragon"]).unwrap_err();
+        assert!(err.contains("dragon"), "error was {err}");
+        assert!(run(&["--mode", "orb", "--playlist", "orb,carrion"]).is_err());
+    }
+
+    #[test]
+    fn normalize_playlist_collapses_and_resolves() {
+        assert_eq!(normalize_playlist("all").unwrap(), Being::all().to_vec());
+        assert_eq!(
+            normalize_playlist("carrion,orb").unwrap(),
+            vec![Being::Carrion, Being::Orb]
+        );
+        assert!(normalize_playlist("dragon").is_err());
+    }
+
+    #[test]
+    fn rotate_and_run_flags_parse() {
+        let cfg = config(&["--playlist", "orb,carrion", "--rotate", "30"]);
+        assert_eq!(cfg.rotate, Some(30.0));
+        assert!(run(&["--rotate", "0"]).is_err());
+        assert!(config(&["--run"]).run);
+        assert!(!config(&[]).run);
+        assert_eq!(
+            config(&["--rotate", "30"]).playlist,
+            Some(Being::all().to_vec())
+        );
+    }
+
+    #[test]
+    fn rotation_conflicts_with_capture() {
+        assert!(run(&["--playlist", "orb,carrion", "--snapshot"]).is_err());
+        assert!(run(&["--rotate", "30", "--cast", "x.cast"]).is_err());
+    }
+
+    #[test]
+    fn should_show_menu_matrix() {
+        let interactive = config(&[]);
+        assert!(should_show_menu(&interactive, true, true));
+        assert!(!should_show_menu(&config(&["--run"]), true, true));
+        assert!(!should_show_menu(&config(&["--mode", "orb"]), true, true));
+        assert!(!should_show_menu(
+            &config(&["--playlist", "orb"]),
+            true,
+            true
+        ));
+        assert!(!should_show_menu(&interactive, false, true));
+        assert!(!should_show_menu(&interactive, true, false));
+        assert!(!should_show_menu(&config(&["--snapshot"]), true, true));
+    }
+
+    #[test]
+    fn usage_documents_rotation_flags() {
+        let text = usage();
+        assert!(text.contains("--mode"));
+        assert!(text.contains("--playlist"));
+        assert!(text.contains("--rotate"));
+        assert!(text.contains("--run"));
     }
 }
