@@ -131,6 +131,19 @@ fn indexed_code(v: f32) -> u8 {
     16 + 36 * q(r) + 6 * q(g) + q(b)
 }
 
+#[allow(dead_code)]
+pub fn menu_color(mode: ColorMode, accent: bool) -> Color {
+    if !accent {
+        return Color::Default;
+    }
+    match mode {
+        ColorMode::Mono => Color::Default,
+        ColorMode::Ansi16 => Color::Basic(94),
+        ColorMode::Ansi256 => Color::Indexed(27),
+        ColorMode::TrueColor | ColorMode::Auto => Color::Rgb(34, 96, 255),
+    }
+}
+
 pub const FLESH_RED: Color = Color::Rgb(150, 14, 14);
 pub const GROOVE_GREY: Color = Color::Rgb(40, 38, 38);
 
@@ -562,6 +575,19 @@ mod tests {
         assert_eq!(title(Being::Orb), b"\x1b]0;ORBYN\x1b\\");
         assert_eq!(title(Being::Carrion), b"\x1b]0;ORBYN // CARRION\x1b\\");
         assert_ne!(title(Being::Orb), title(Being::Carrion));
+    }
+
+    #[test]
+    fn menu_color_uses_accent_blue_family() {
+        assert_eq!(
+            menu_color(ColorMode::TrueColor, true),
+            Color::Rgb(34, 96, 255)
+        );
+        assert_eq!(menu_color(ColorMode::Auto, true), Color::Rgb(34, 96, 255));
+        assert_eq!(menu_color(ColorMode::Ansi256, true), Color::Indexed(27));
+        assert_eq!(menu_color(ColorMode::Ansi16, true), Color::Basic(94));
+        assert_eq!(menu_color(ColorMode::Mono, true), Color::Default);
+        assert_eq!(menu_color(ColorMode::TrueColor, false), Color::Default);
     }
 
     #[test]

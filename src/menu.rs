@@ -1,5 +1,5 @@
 use crate::being::Being;
-use crate::term::ColorMode;
+use crate::term::{menu_color, Cell, Color, ColorMode};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Key {
@@ -284,6 +284,220 @@ pub fn on_key(state: &mut MenuState, key: Key) -> Option<TableAction> {
         }
         Key::Other(_) => None,
     }
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Debug, PartialEq)]
+pub struct PreviewFrame {
+    pub origin: (usize, usize),
+    pub size: (usize, usize),
+    pub cells: Vec<Cell>,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MenuRects {
+    pub preview: Option<(usize, usize, usize, usize)>,
+    pub modes: (usize, usize),
+    pub params: (usize, usize),
+    pub start: (usize, usize),
+}
+
+#[allow(dead_code)]
+fn color_name(mode: ColorMode) -> &'static str {
+    match mode {
+        ColorMode::Auto => "auto",
+        ColorMode::TrueColor => "truecolor",
+        ColorMode::Ansi256 => "256",
+        ColorMode::Ansi16 => "16",
+        ColorMode::Mono => "mono",
+    }
+}
+
+#[allow(dead_code)]
+fn param_text(row: ParamRow, params: &Params) -> String {
+    match row {
+        ParamRow::Speed => format!("speed {:.1}", params.speed),
+        ParamRow::Trail => format!("trail {:.2}", params.trail),
+        ParamRow::Size => match params.size {
+            Some(value) => format!("size {value}"),
+            None => "size auto".to_string(),
+        },
+        ParamRow::Color => format!("color {}", color_name(params.color)),
+        ParamRow::Fps => format!("fps {}", params.fps),
+        ParamRow::Hud => format!("hud {}", params.hud),
+        ParamRow::Interval => format!("interval {}", params.interval),
+    }
+}
+
+#[allow(dead_code)]
+pub fn layout(w: usize, h: usize) -> MenuRects {
+    let half_w = w / 2;
+    let half_h = h / 2;
+    let quadrant_h = h - half_h;
+    let interior_w = half_w.saturating_sub(2);
+    let interior_h = quadrant_h.saturating_sub(2);
+    let preview = if interior_w >= 8 && interior_h >= 5 {
+        Some((1, half_h + 1, interior_w, interior_h))
+    } else {
+        None
+    };
+    let mut modes_w = "Playlist [off]".chars().count();
+    for being in Being::all() {
+        modes_w = modes_w.max(2 + being.name().chars().count());
+    }
+    let mut params_w = 0;
+    for row in param_rows(true) {
+        params_w = params_w.max(param_text(*row, &Params::default()).chars().count());
+    }
+    let modes_x = w.saturating_sub(modes_w);
+    let params_x = modes_x.saturating_sub(params_w);
+    let start = match preview {
+        Some((x, y, _, ih)) => (x, y + ih - 1),
+        None => (0, h.saturating_sub(1)),
+    };
+    MenuRects {
+        preview,
+        modes: (modes_x, 0),
+        params: (params_x, 0),
+        start,
+    }
+}
+
+#[allow(dead_code)]
+fn put(buf: &mut [Cell], w: usize, h: usize, x: usize, y: usize, s: &str, color: Color) {
+    if w == 0 || y >= h {
+        return;
+    }
+    for (cx, ch) in (x..).zip(s.chars()) {
+        if cx >= w {
+            break;
+        }
+        buf[y * w + cx] = Cell { ch, color };
+    }
+}
+
+#[allow(dead_code)]
+fn put_right(buf: &mut [Cell], w: usize, h: usize, end: usize, y: usize, s: &str, color: Color) {
+    if w == 0 || end == 0 || y >= h {
+        return;
+    }
+    let len = s.chars().count();
+    let skip = len.saturating_sub(end);
+    for (x, ch) in (end.saturating_sub(len)..).zip(s.chars().skip(skip)) {
+        if x >= w {
+            break;
+        }
+        buf[y * w + x] = Cell { ch, color };
+    }
+}
+
+#[allow(dead_code)]
+pub fn frame(state: &MenuState, preview: Option<&PreviewFrame>, w: usize, h: usize) -> Vec<Cell> {
+    let mut buf = vec![Cell::BLANK; w.saturating_mul(h)];
+    if w == 0 || h == 0 {
+        return buf;
+    }
+    let rects = layout(w, h);
+    let half_w = w / 2;
+    let half_h = h / 2;
+    let accent = menu_color(ColorMode::TrueColor, true);
+    if let Some((ix, iy, iw, ih)) = rects.preview {
+        let white = Color::Rgb(255, 255, 255);
+        for x in 0..half_w {
+            buf[half_h * w + x] = Cell {
+                ch: '─',
+                color: white,
+            };
+            buf[(h - 1) * w + x] = Cell {
+                ch: '─',
+                color: white,
+            };
+        }
+        for y in half_h..h {
+            buf[y * w] = Cell {
+                ch: '│',
+                color: white,
+            };
+            buf[y * w + half_w - 1] = Cell {
+                ch: '│',
+                color: white,
+            };
+        }
+        buf[half_h * w] = Cell {
+            ch: '╭',
+            color: white,
+        };
+        buf[half_h * w + half_w - 1] = Cell {
+            ch: '╮',
+            color: white,
+        };
+        buf[(h - 1) * w] = Cell {
+            ch: '╰',
+            color: white,
+        };
+        buf[(h - 1) * w + half_w - 1] = Cell {
+            ch: '╯',
+            color: white,
+        };
+        if let Some(pv) = preview {
+            for row in 0..pv.size.1 {
+                for col in 0..pv.size.0 {
+                    let idx = row * pv.size.0 + col;
+                    if idx >= pv.cells.len() {
+                        break;
+                    }
+                    let x = pv.origin.0 + col;
+                    let y = pv.origin.1 + row;
+                    if x >= ix && x < ix + iw && y >= iy && y < iy + ih {
+                        buf[y * w + x] = pv.cells[idx];
+                    }
+                }
+            }
+        }
+    }
+
+    put(&mut buf, w, h, 0, 0, "ORBYN", accent);
+
+    let playlist_text = if state.playlist_on {
+        "Playlist [on]"
+    } else {
+        "Playlist [off]"
+    };
+    let playlist_color = if state.focus == Focus::List && state.list_index == 0 {
+        accent
+    } else {
+        Color::Default
+    };
+    put_right(&mut buf, w, h, w, 0, playlist_text, playlist_color);
+
+    for (i, being) in Being::all().iter().enumerate() {
+        let row = i + 1;
+        let mark = if state.marked[i] { '▪' } else { '○' };
+        let text = format!("{mark} {}", being.name());
+        let color = if state.focus == Focus::List && state.list_index == row {
+            accent
+        } else {
+            Color::Default
+        };
+        put_right(&mut buf, w, h, w, row, &text, color);
+    }
+
+    let params_end = rects.modes.0;
+    for (i, row) in param_rows(state.playlist_on).iter().enumerate() {
+        let text = param_text(*row, &state.params);
+        let color = if state.focus == Focus::Params && state.param_index == i {
+            accent
+        } else {
+            Color::Default
+        };
+        put_right(&mut buf, w, h, params_end, i, &text, color);
+    }
+
+    let (sx, sy) = rects.start;
+    put(&mut buf, w, h, sx, sy, "[ START ]", accent);
+
+    buf
 }
 
 #[cfg(test)]
@@ -695,5 +909,271 @@ mod tests {
             params.adjust(ParamRow::Interval, -1);
         }
         assert_eq!(params.interval, 1.0);
+    }
+}
+
+#[cfg(test)]
+mod render_tests {
+    use super::*;
+
+    const W: usize = 80;
+    const H: usize = 24;
+
+    fn blank() -> MenuState {
+        MenuState::default()
+    }
+
+    fn at(cells: &[Cell], w: usize, x: usize, y: usize) -> Cell {
+        cells[y * w + x]
+    }
+
+    fn row_text(cells: &[Cell], w: usize, y: usize, x0: usize, x1: usize) -> String {
+        (x0..x1).map(|x| at(cells, w, x, y).ch).collect()
+    }
+
+    fn accent() -> Color {
+        menu_color(ColorMode::TrueColor, true)
+    }
+
+    #[test]
+    fn layout_80x24_pins_rects() {
+        let rects = layout(W, H);
+        assert_eq!(rects.preview, Some((1, 13, 38, 10)));
+        assert_eq!(rects.modes, (66, 0));
+        assert_eq!(rects.params, (54, 0));
+        assert_eq!(rects.start, (1, 22));
+    }
+
+    #[test]
+    fn layout_thresholds_match_brief() {
+        assert_eq!(layout(20, 24).preview, Some((1, 13, 8, 10)));
+        assert_eq!(layout(19, 24).preview, None);
+        assert_eq!(layout(40, 14).preview, Some((1, 8, 18, 5)));
+        assert_eq!(layout(40, 13).preview, Some((1, 7, 18, 5)));
+        assert_eq!(layout(40, 12).preview, None);
+        assert_eq!(layout(16, 6).preview, None);
+    }
+
+    #[test]
+    fn preview_border_is_white_on_all_four_edges() {
+        let cells = frame(&blank(), None, W, H);
+        let white = Color::Rgb(255, 255, 255);
+        for x in 0..40 {
+            assert_eq!(at(&cells, W, x, 12).color, white);
+            assert_eq!(at(&cells, W, x, 23).color, white);
+        }
+        for y in 12..24 {
+            assert_eq!(at(&cells, W, 0, y).color, white);
+            assert_eq!(at(&cells, W, 39, y).color, white);
+        }
+        assert_eq!(at(&cells, W, 0, 12).ch, '╭');
+        assert_eq!(at(&cells, W, 39, 12).ch, '╮');
+        assert_eq!(at(&cells, W, 0, 23).ch, '╰');
+        assert_eq!(at(&cells, W, 39, 23).ch, '╯');
+    }
+
+    #[test]
+    fn preview_cells_are_blitted_into_the_interior() {
+        let pv = PreviewFrame {
+            origin: (1, 13),
+            size: (3, 2),
+            cells: (0..6)
+                .map(|i| Cell {
+                    ch: (b'a' + i) as char,
+                    color: Color::Basic(1),
+                })
+                .collect(),
+        };
+        let cells = frame(&blank(), Some(&pv), W, H);
+        assert_eq!(at(&cells, W, 1, 13).ch, 'a');
+        assert_eq!(at(&cells, W, 3, 13).ch, 'c');
+        assert_eq!(at(&cells, W, 1, 14).ch, 'd');
+        assert_eq!(at(&cells, W, 3, 14).ch, 'f');
+        assert_eq!(at(&cells, W, 1, 13).color, Color::Basic(1));
+        assert_eq!(at(&cells, W, 4, 13), Cell::BLANK);
+        assert_eq!(at(&cells, W, 1, 15), Cell::BLANK);
+    }
+
+    #[test]
+    fn preview_cells_are_clipped_to_the_interior() {
+        let pv = PreviewFrame {
+            origin: (0, 12),
+            size: (50, 20),
+            cells: vec![
+                Cell {
+                    ch: '#',
+                    color: Color::Basic(2),
+                };
+                1000
+            ],
+        };
+        let cells = frame(&blank(), Some(&pv), W, H);
+        assert_eq!(at(&cells, W, 0, 12).ch, '╭');
+        assert_eq!(at(&cells, W, 0, 12).color, Color::Rgb(255, 255, 255));
+        assert_eq!(at(&cells, W, 1, 13).ch, '#');
+        assert_eq!(at(&cells, W, 38, 22).ch, '#');
+        assert_eq!(at(&cells, W, 40, 12), Cell::BLANK);
+    }
+
+    #[test]
+    fn start_button_sits_inside_the_frame() {
+        let cells = frame(&blank(), None, W, H);
+        for (i, ch) in "[ START ]".chars().enumerate() {
+            let cell = at(&cells, W, 1 + i, 22);
+            assert_eq!(cell.ch, ch, "offset {i}");
+            assert_eq!(cell.color, accent());
+        }
+    }
+
+    #[test]
+    fn start_button_falls_back_to_screen_corner() {
+        let cells = frame(&blank(), None, 16, 6);
+        assert_eq!(at(&cells, 16, 0, 5).ch, '[');
+        assert_eq!(at(&cells, 16, 2, 5).ch, 'S');
+        assert_eq!(at(&cells, 16, 8, 5).ch, ']');
+    }
+
+    #[test]
+    fn modes_rows_are_right_aligned() {
+        let cells = frame(&blank(), None, W, H);
+        assert_eq!(row_text(&cells, W, 0, 66, 80), "Playlist [off]");
+        assert_eq!(row_text(&cells, W, 1, 75, 80), "○ orb");
+        assert_eq!(row_text(&cells, W, 2, 71, 80), "○ carrion");
+    }
+
+    #[test]
+    fn playlist_toggle_shows_on() {
+        let state = MenuState {
+            playlist_on: true,
+            ..blank()
+        };
+        let cells = frame(&state, None, W, H);
+        assert_eq!(row_text(&cells, W, 0, 67, 80), "Playlist [on]");
+    }
+
+    #[test]
+    fn marks_track_state() {
+        let state = MenuState {
+            marked: [true, false],
+            ..blank()
+        };
+        let cells = frame(&state, None, W, H);
+        assert_eq!(at(&cells, W, 75, 1).ch, '▪');
+        assert_eq!(at(&cells, W, 71, 2).ch, '○');
+
+        let flipped = MenuState {
+            marked: [false, true],
+            ..blank()
+        };
+        let cells = frame(&flipped, None, W, H);
+        assert_eq!(at(&cells, W, 75, 1).ch, '○');
+        assert_eq!(at(&cells, W, 71, 2).ch, '▪');
+    }
+
+    #[test]
+    fn params_column_sits_left_of_modes() {
+        let cells = frame(&blank(), None, W, H);
+        assert_eq!(row_text(&cells, W, 0, 57, 66), "speed 1.0");
+        assert_eq!(row_text(&cells, W, 1, 56, 66), "trail 0.82");
+        assert_eq!(row_text(&cells, W, 2, 57, 66), "size auto");
+        assert_eq!(row_text(&cells, W, 3, 56, 66), "color auto");
+        assert_eq!(row_text(&cells, W, 4, 60, 66), "fps 30");
+        assert_eq!(row_text(&cells, W, 5, 61, 66), "hud 6");
+    }
+
+    #[test]
+    fn param_values_reflect_state() {
+        let state = MenuState {
+            params: Params {
+                speed: 2.5,
+                trail: 0.5,
+                size: Some(12.0),
+                color: ColorMode::Ansi256,
+                fps: 60,
+                hud: 3,
+                interval: 45.0,
+            },
+            playlist_on: true,
+            ..blank()
+        };
+        let cells = frame(&state, None, W, H);
+        assert_eq!(row_text(&cells, W, 0, 57, 66), "speed 2.5");
+        assert_eq!(row_text(&cells, W, 1, 56, 66), "trail 0.50");
+        assert_eq!(row_text(&cells, W, 2, 59, 66), "size 12");
+        assert_eq!(row_text(&cells, W, 3, 57, 66), "color 256");
+        assert_eq!(row_text(&cells, W, 4, 60, 66), "fps 60");
+        assert_eq!(row_text(&cells, W, 5, 61, 66), "hud 3");
+        assert_eq!(row_text(&cells, W, 6, 55, 66), "interval 45");
+    }
+
+    #[test]
+    fn interval_row_only_when_playlist_on() {
+        let off = frame(&blank(), None, W, H);
+        for x in 54..66 {
+            assert_eq!(at(&off, W, x, 6), Cell::BLANK);
+        }
+        let on = frame(
+            &MenuState {
+                playlist_on: true,
+                ..blank()
+            },
+            None,
+            W,
+            H,
+        );
+        assert_eq!(row_text(&on, W, 6, 54, 66), "interval 300");
+    }
+
+    #[test]
+    fn wordmark_sits_top_left_in_accent() {
+        let cells = frame(&blank(), None, W, H);
+        assert_eq!(row_text(&cells, W, 0, 0, 5), "ORBYN");
+        for x in 0..5 {
+            assert_eq!(at(&cells, W, x, 0).color, accent());
+        }
+    }
+
+    #[test]
+    fn focused_rows_use_accent() {
+        let mut state = blank();
+        state.list_index = 1;
+        let cells = frame(&state, None, W, H);
+        assert_eq!(at(&cells, W, 75, 1).color, accent());
+        assert_eq!(at(&cells, W, 66, 0).color, Color::Default);
+
+        let params = MenuState {
+            focus: Focus::Params,
+            param_index: 0,
+            ..blank()
+        };
+        let cells = frame(&params, None, W, H);
+        assert_eq!(at(&cells, W, 57, 0).color, accent());
+        assert_eq!(at(&cells, W, 75, 1).color, Color::Default);
+    }
+
+    #[test]
+    fn tiny_terminals_never_panic_and_keep_size() {
+        for (w, h) in [(16, 6), (1, 1), (0, 0), (3, 2), (10, 3), (24, 8), (19, 24)] {
+            let cells = frame(&blank(), None, w, h);
+            assert_eq!(cells.len(), w * h);
+        }
+    }
+
+    #[test]
+    fn frame_is_deterministic() {
+        let pv = PreviewFrame {
+            origin: (1, 13),
+            size: (4, 4),
+            cells: vec![
+                Cell {
+                    ch: 'x',
+                    color: Color::Basic(3),
+                };
+                16
+            ],
+        };
+        let a = frame(&blank(), Some(&pv), W, H);
+        let b = frame(&blank(), Some(&pv), W, H);
+        assert_eq!(a, b);
     }
 }
