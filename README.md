@@ -30,18 +30,57 @@ cargo install --path .
 
 ## Usage
 
+Run `orbyn` with no arguments in a terminal and it opens an interactive menu:
+
 ```sh
-orbyn            # blue wireframe orb
-orbyn -carrion   # red flesh creature
-orbyn --help     # every option
+orbyn
 ```
 
-Keys:
+Menu keys:
 
-- `q` or `Ctrl-C` — quit
-- `space` — pause
-- `h` — toggle telemetry (orb) or body detail (carrion)
-- `+` / `-` — speed up / slow down
+- `Up` / `Down` — move through the mode list and parameter rows
+- `Left` / `Right` — switch between the mode list and the parameter column
+- `Enter` — start the focused mode; on the playlist row it toggles playlist
+  mode, and on a mode row while playlist mode is on it marks that mode
+- `+` / `-` — adjust the focused parameter
+- `q` or `Esc` — quit
+
+### Direct run
+
+Skip the menu and start immediately with `--run`, or pick a mode up front:
+
+```sh
+orbyn --run          # start the default orb immediately, no menu
+orbyn --mode carrion # named mode
+orbyn -carrion       # shorthand for the carrion mode
+```
+
+Direct runs apply every option below and use the run-phase keys:
+
+| Key | Action |
+| --- | --- |
+| `q`, `Ctrl-C`, `Ctrl-D` | quit |
+| `space` | pause |
+| `h` | toggle telemetry (orb) or body detail (carrion) |
+| `n` | swap to the next being now |
+| `+`, `=` / `-`, `_` | speed up / slow down |
+
+### Rotation
+
+`--playlist` and `--rotate` cycle through beings:
+
+```sh
+orbyn --playlist orb,carrion --rotate 30  # listed beings, swap every 30s
+orbyn --playlist all                      # every being, every 300s
+orbyn --rotate 45                         # every being, every 45s
+```
+
+- `--playlist <NAMES>` takes a comma-separated list of modes, or `all`. On its
+  own it rotates through them every 300 seconds.
+- `--rotate <SECS>` sets the seconds between swaps. On its own it rotates
+  through every being.
+- Rotation swaps to the next being when the interval elapses; press `n` to jump
+  to the next being immediately.
 
 The terminal is restored on normal quit, panic, and `SIGINT`/`SIGTERM`/`SIGHUP`.
 Use a dark terminal theme.
@@ -50,6 +89,10 @@ Use a dark terminal theme.
 
 | Option | Description | Default |
 | --- | --- | --- |
+| `--mode <NAME>` | Start directly in a named mode | menu |
+| `--playlist <NAMES>` | Modes to rotate through, comma-separated or `all` | — |
+| `--rotate <SECS>` | Seconds between rotation swaps | `300` |
+| `--run` | Skip the menu and start immediately | off |
 | `-carrion`, `--carrion` | Use the red flesh creature instead of the orb | orb |
 | `-s`, `--speed <FLOAT>` | Motion speed multiplier, 0.05–20.0 | `1.0` |
 | `--fps <N>` | Frames per second, 1–240 | `30` |

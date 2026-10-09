@@ -167,11 +167,18 @@ CAPTURE (headless, no TTY required):
         --warmup <SECS>   Simulated settle time before capture [default: 2.0]
         --duration <SECS> Captured length in seconds [default: 6.0]
 
+MENU (bare `orbyn`):
+    arrows              move through modes and parameters
+    Enter               start, toggle playlist, or mark a mode
+    +, -                adjust the focused parameter
+    q                   quit
+
 KEYS:
-    q, Ctrl-C   quit
-    space       pause
-    h           toggle telemetry (orb) / body detail (carrion)
-    +, -        speed up / slow down
+    q, Ctrl-C, Ctrl-D   quit
+    space               pause
+    h                   toggle telemetry (orb) / body detail (carrion)
+    n                   swap to the next being
+    +, -                speed up / slow down
 "
     )
 }
@@ -556,5 +563,20 @@ mod tests {
         assert!(text.contains("--playlist"));
         assert!(text.contains("--rotate"));
         assert!(text.contains("--run"));
+    }
+
+    #[test]
+    fn usage_documents_run_keys() {
+        let text = usage();
+        for flag in ["--mode", "--playlist", "--rotate", "--run"] {
+            assert!(text.contains(flag), "usage missing {flag}");
+        }
+        for key in ["q", "space", "h", "+", "-"] {
+            assert!(text.contains(key), "usage missing run key {key}");
+        }
+        assert!(
+            text.contains("next being"),
+            "usage missing 'n' next-being key"
+        );
     }
 }
