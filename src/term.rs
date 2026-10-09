@@ -410,9 +410,15 @@ fn tty_cmd(args: &[&str]) -> Option<String> {
     }
 }
 
+fn title(being: Being) -> &'static [u8] {
+    match being {
+        Being::Orb => b"\x1b]0;ORBYN\x1b\\",
+        Being::Carrion => b"\x1b]0;ORBYN // CARRION\x1b\\",
+    }
+}
+
 pub struct Terminal {
     mode: ColorMode,
-    being: Being,
     renderer: Renderer,
     w: usize,
     h: usize,
@@ -438,7 +444,6 @@ impl Terminal {
         renderer.reset(w, h);
         let mut terminal = Self {
             mode,
-            being,
             renderer,
             w,
             h,
@@ -450,12 +455,8 @@ impl Terminal {
     }
 
     pub fn set_title(&mut self, being: Being) {
-        let title: &[u8] = match being {
-            Being::Orb => b"\x1b]0;ORBYN\x1b\\",
-            Being::Carrion => b"\x1b]0;ORBYN // CARRION\x1b\\",
-        };
         let mut stdout = io::stdout();
-        let _ = stdout.write_all(title);
+        let _ = stdout.write_all(title(being));
         let _ = stdout.flush();
     }
 
@@ -472,8 +473,8 @@ impl Terminal {
         Ok((w, h))
     }
 
-    pub fn draw(&mut self, grid: &Grid) -> io::Result<()> {
-        let cells = cells_for(grid, self.being, self.mode);
+    pub fn draw(&mut self, being: Being, grid: &Grid) -> io::Result<()> {
+        let cells = cells_for(grid, being, self.mode);
         self.draw_cells(&cells)
     }
 
@@ -554,6 +555,13 @@ mod tests {
     fn shade_blank_at_zero() {
         assert_eq!(shade(0.0, ColorMode::TrueColor).0, ' ');
         assert_eq!(shade(-3.0, ColorMode::TrueColor).0, ' ');
+    }
+
+    #[test]
+    fn title_matches_being() {
+        assert_eq!(title(Being::Orb), b"\x1b]0;ORBYN\x1b\\");
+        assert_eq!(title(Being::Carrion), b"\x1b]0;ORBYN // CARRION\x1b\\");
+        assert_ne!(title(Being::Orb), title(Being::Carrion));
     }
 
     #[test]

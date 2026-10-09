@@ -150,7 +150,7 @@ fn run(cfg: &Config) -> std::io::Result<()> {
             sim.update(dt, w, h);
         }
 
-        terminal.draw(sim.grid())?;
+        terminal.draw(current_kind, sim.grid())?;
 
         let frame_elapsed = frame_start.elapsed();
         if frame_elapsed < frame {
