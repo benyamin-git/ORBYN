@@ -5,6 +5,7 @@ mod carrion;
 mod globe;
 mod hud;
 mod rng;
+mod rotation;
 mod scene;
 mod term;
 
