@@ -3,6 +3,7 @@ use std::time::{Duration, Instant};
 
 use crate::args::Config;
 use crate::being::{Being, Sim};
+use crate::rng::Rng;
 use crate::rotation::AUTO_INTERVAL;
 use crate::term::{self, menu_color, Cell, Color, ColorMode, Event};
 
@@ -388,7 +389,13 @@ fn put_right(buf: &mut [Cell], w: usize, h: usize, end: usize, y: usize, s: &str
     }
 }
 
-pub fn frame(state: &MenuState, preview: Option<&PreviewFrame>, w: usize, h: usize) -> Vec<Cell> {
+pub fn frame(
+    state: &MenuState,
+    preview: Option<&PreviewFrame>,
+    w: usize,
+    h: usize,
+    mode: ColorMode,
+) -> Vec<Cell> {
     let mut buf = vec![Cell::BLANK; w.saturating_mul(h)];
     if w == 0 || h == 0 {
         return buf;
@@ -396,44 +403,48 @@ pub fn frame(state: &MenuState, preview: Option<&PreviewFrame>, w: usize, h: usi
     let rects = layout(w, h);
     let half_w = w / 2;
     let half_h = h / 2;
-    let accent = menu_color(ColorMode::TrueColor, true);
+    let accent = menu_color(mode, true);
     if let Some((ix, iy, iw, ih)) = rects.preview {
-        let white = Color::Rgb(255, 255, 255);
+        let border = if mode == ColorMode::Mono {
+            Color::Default
+        } else {
+            Color::Rgb(255, 255, 255)
+        };
         for x in 0..half_w {
             buf[half_h * w + x] = Cell {
                 ch: '─',
-                color: white,
+                color: border,
             };
             buf[(h - 1) * w + x] = Cell {
                 ch: '─',
-                color: white,
+                color: border,
             };
         }
         for y in half_h..h {
             buf[y * w] = Cell {
                 ch: '│',
-                color: white,
+                color: border,
             };
             buf[y * w + half_w - 1] = Cell {
                 ch: '│',
-                color: white,
+                color: border,
             };
         }
         buf[half_h * w] = Cell {
             ch: '╭',
-            color: white,
+            color: border,
         };
         buf[half_h * w + half_w - 1] = Cell {
             ch: '╮',
-            color: white,
+            color: border,
         };
         buf[(h - 1) * w] = Cell {
             ch: '╰',
-            color: white,
+            color: border,
         };
         buf[(h - 1) * w + half_w - 1] = Cell {
             ch: '╯',
-            color: white,
+            color: border,
         };
         if let Some(pv) = preview {
             for row in 0..pv.size.1 {
@@ -531,12 +542,20 @@ pub fn to_config(req: &RunRequest, base: &Config) -> Config {
     cfg
 }
 
-pub fn preview_cells(being: Being, cfg: &Config, w: usize, h: usize, dt: f32) -> Vec<Cell> {
+#[cfg(test)]
+pub fn preview_cells(
+    being: Being,
+    cfg: &Config,
+    w: usize,
+    h: usize,
+    dt: f32,
+    mode: ColorMode,
+) -> Vec<Cell> {
     let mut sim = Sim::new(being, cfg, w, h);
     for _ in 0..12 {
         sim.update(dt, w, h);
     }
-    term::cells_for(sim.grid(), being, ColorMode::TrueColor)
+    term::cells_for(sim.grid(), being, mode)
 }
 
 fn preview_config(params: &Params, seed: Option<u64>) -> Config {
@@ -549,6 +568,78 @@ fn preview_config(params: &Params, seed: Option<u64>) -> Config {
         hud: params.hud,
         fps: params.fps,
         ..Config::default()
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct PreviewKey {
+    being: Being,
+    speed: f32,
+    trail: f32,
+    size: Option<f32>,
+    fps: u32,
+    hud: u32,
+    w: usize,
+    h: usize,
+}
+
+impl PreviewKey {
+    fn params(self) -> Params {
+        Params {
+            speed: self.speed,
+            trail: self.trail,
+            size: self.size,
+            fps: self.fps,
+            hud: self.hud,
+            ..Params::default()
+        }
+    }
+}
+
+fn preview_key(being: Being, params: &Params, w: usize, h: usize) -> PreviewKey {
+    PreviewKey {
+        being,
+        speed: params.speed,
+        trail: params.trail,
+        size: params.size,
+        fps: params.fps,
+        hud: params.hud,
+        w,
+        h,
+    }
+}
+
+struct PreviewSim {
+    key: PreviewKey,
+    seed: u64,
+    sim: Sim,
+}
+
+impl PreviewSim {
+    fn new(key: PreviewKey, cfg_seed: Option<u64>) -> Self {
+        let seed = cfg_seed.unwrap_or_else(Rng::seed_from_time);
+        Self::with_seed(key, seed)
+    }
+
+    fn with_seed(key: PreviewKey, seed: u64) -> Self {
+        let cfg = preview_config(&key.params(), Some(seed));
+        Self {
+            key,
+            seed,
+            sim: Sim::new(key.being, &cfg, key.w, key.h),
+        }
+    }
+
+    fn rebuild(&mut self, key: PreviewKey, cfg_seed: Option<u64>) {
+        self.seed = cfg_seed.unwrap_or(self.seed);
+        self.key = key;
+        let cfg = preview_config(&key.params(), Some(self.seed));
+        self.sim = Sim::new(key.being, &cfg, key.w, key.h);
+    }
+
+    fn tick(&mut self, dt: f32, mode: ColorMode) -> Vec<Cell> {
+        self.sim.update(dt, self.key.w, self.key.h);
+        term::cells_for(self.sim.grid(), self.key.being, mode)
     }
 }
 
@@ -596,12 +687,16 @@ fn run_request(state: &MenuState, cfg: &Config) -> RunRequest {
     }
 }
 
-fn take_key(buffer: &mut Vec<u8>) -> Option<Key> {
+fn take_key(buffer: &mut Vec<u8>, escape_expired: bool) -> Option<Key> {
     loop {
         if buffer.is_empty() {
             return None;
         }
         if buffer[0] == 0x1b && buffer.len() < 3 {
+            if escape_expired && buffer.len() == 1 {
+                buffer.remove(0);
+                return Some(Key::Esc);
+            }
             return None;
         }
         match decode(buffer) {
@@ -616,7 +711,12 @@ fn take_key(buffer: &mut Vec<u8>) -> Option<Key> {
     }
 }
 
-pub fn run(term: &mut term::Terminal, rx: &Receiver<Event>, cfg: &Config) -> Option<RunRequest> {
+pub fn run(
+    term: &mut term::Terminal,
+    rx: &Receiver<Event>,
+    cfg: &Config,
+    mode: ColorMode,
+) -> Option<RunRequest> {
     let mut state = MenuState {
         params: Params::from_cfg(cfg),
         ..MenuState::default()
@@ -624,6 +724,8 @@ pub fn run(term: &mut term::Terminal, rx: &Receiver<Event>, cfg: &Config) -> Opt
     let dt = 1.0f32 / 12.0;
     let frame_time = Duration::from_secs_f32(dt);
     let mut buffer = Vec::new();
+    let mut escape_expired = false;
+    let mut preview_sim: Option<PreviewSim> = None;
 
     loop {
         let frame_start = Instant::now();
@@ -636,20 +738,26 @@ pub fn run(term: &mut term::Terminal, rx: &Receiver<Event>, cfg: &Config) -> Opt
             if pw == 0 || ph == 0 {
                 return None;
             }
+            let key = preview_key(hovered, &state.params, pw, ph);
+            let mut cache = match preview_sim.take() {
+                Some(mut cached) => {
+                    if cached.key != key {
+                        cached.rebuild(key, cfg.seed);
+                    }
+                    cached
+                }
+                None => PreviewSim::new(key, cfg.seed),
+            };
+            let cells = cache.tick(dt, mode);
+            preview_sim = Some(cache);
             Some(PreviewFrame {
                 origin: (ix + 1, iy + 1),
                 size: (pw, ph),
-                cells: preview_cells(
-                    hovered,
-                    &preview_config(&state.params, cfg.seed),
-                    pw,
-                    ph,
-                    dt,
-                ),
+                cells,
             })
         });
 
-        let cells = frame(&state, preview.as_ref(), w, h);
+        let cells = frame(&state, preview.as_ref(), w, h, mode);
         let _ = term.draw_cells(&cells);
 
         while let Ok(event) = rx.try_recv() {
@@ -662,7 +770,7 @@ pub fn run(term: &mut term::Terminal, rx: &Receiver<Event>, cfg: &Config) -> Opt
             }
         }
 
-        while let Some(key) = take_key(&mut buffer) {
+        while let Some(key) = take_key(&mut buffer, escape_expired) {
             match on_key(&mut state, key) {
                 Some(TableAction::Quit) => {
                     term.restore();
@@ -677,6 +785,7 @@ pub fn run(term: &mut term::Terminal, rx: &Receiver<Event>, cfg: &Config) -> Opt
                 _ => {}
             }
         }
+        escape_expired = buffer.as_slice() == [0x1b];
 
         let elapsed = frame_start.elapsed();
         if elapsed < frame_time {
@@ -1184,8 +1293,9 @@ mod tests {
     fn preview_cells_are_deterministic_and_sized() {
         let cfg = base_cfg();
         let dt = 1.0 / 12.0;
-        let first = preview_cells(Being::Orb, &cfg, 30, 10, dt);
-        let second = preview_cells(Being::Orb, &cfg, 30, 10, dt);
+        let mode = ColorMode::TrueColor;
+        let first = preview_cells(Being::Orb, &cfg, 30, 10, dt, mode);
+        let second = preview_cells(Being::Orb, &cfg, 30, 10, dt, mode);
         assert_eq!(first, second);
         assert_eq!(first.len(), 30 * 10);
         assert!(first.iter().any(|cell| cell.ch != ' '));
@@ -1195,16 +1305,18 @@ mod tests {
     fn preview_tracks_live_parameters() {
         let seed = Some(7);
         let dt = 1.0 / 12.0;
+        let mode = ColorMode::TrueColor;
         let auto = Params::default();
         let sized = Params {
             size: Some(20.0),
             ..Params::default()
         };
-        let auto_cells = preview_cells(Being::Orb, &preview_config(&auto, seed), 60, 20, dt);
-        let sized_cells = preview_cells(Being::Orb, &preview_config(&sized, seed), 60, 20, dt);
+        let auto_cells = preview_cells(Being::Orb, &preview_config(&auto, seed), 60, 20, dt, mode);
+        let sized_cells =
+            preview_cells(Being::Orb, &preview_config(&sized, seed), 60, 20, dt, mode);
         assert_ne!(auto_cells, sized_cells);
 
-        let again = preview_cells(Being::Orb, &preview_config(&auto, seed), 60, 20, dt);
+        let again = preview_cells(Being::Orb, &preview_config(&auto, seed), 60, 20, dt, mode);
         assert_eq!(auto_cells, again);
 
         let slow = Params {
@@ -1215,9 +1327,79 @@ mod tests {
             speed: 20.0,
             ..Params::default()
         };
-        let slow_cells = preview_cells(Being::Orb, &preview_config(&slow, seed), 60, 20, dt);
-        let fast_cells = preview_cells(Being::Orb, &preview_config(&fast, seed), 60, 20, dt);
+        let slow_cells = preview_cells(Being::Orb, &preview_config(&slow, seed), 60, 20, dt, mode);
+        let fast_cells = preview_cells(Being::Orb, &preview_config(&fast, seed), 60, 20, dt, mode);
         assert_ne!(slow_cells, fast_cells);
+    }
+
+    #[test]
+    fn preview_cells_follow_color_mode() {
+        let cfg = base_cfg();
+        let dt = 1.0 / 12.0;
+        let truecolor = preview_cells(Being::Orb, &cfg, 30, 10, dt, ColorMode::TrueColor);
+        let mono = preview_cells(Being::Orb, &cfg, 30, 10, dt, ColorMode::Mono);
+        assert_ne!(truecolor, mono);
+        assert!(mono.iter().all(|cell| cell.color == Color::Default));
+        assert!(truecolor
+            .iter()
+            .any(|cell| matches!(cell.color, Color::Rgb(..))));
+    }
+
+    #[test]
+    fn preview_sim_advances_with_fixed_seed() {
+        let key = preview_key(Being::Orb, &Params::default(), 60, 20);
+        let dt = 1.0 / 12.0;
+        let mut cached = PreviewSim::new(key, Some(7));
+        let first = cached.tick(dt, ColorMode::TrueColor);
+        let second = cached.tick(dt, ColorMode::TrueColor);
+        assert_ne!(first, second);
+
+        let mut rebuilt = PreviewSim::new(key, Some(7));
+        assert_eq!(first, rebuilt.tick(dt, ColorMode::TrueColor));
+        assert_eq!(second, rebuilt.tick(dt, ColorMode::TrueColor));
+    }
+
+    #[test]
+    fn preview_sim_captures_time_seed_once() {
+        let key = preview_key(Being::Orb, &Params::default(), 60, 20);
+        let dt = 1.0 / 12.0;
+        let mut cached = PreviewSim::new(key, None);
+        let captured = cached.seed;
+        let first = cached.tick(dt, ColorMode::TrueColor);
+        let second = cached.tick(dt, ColorMode::TrueColor);
+        assert_ne!(first, second);
+        assert_eq!(cached.seed, captured);
+
+        let mut replay = PreviewSim::new(key, Some(captured));
+        assert_eq!(first, replay.tick(dt, ColorMode::TrueColor));
+        assert_eq!(second, replay.tick(dt, ColorMode::TrueColor));
+    }
+
+    #[test]
+    fn preview_sim_rebuild_follows_params_and_seed() {
+        let a = preview_key(Being::Orb, &Params::default(), 60, 20);
+        let b = preview_key(
+            Being::Orb,
+            &Params {
+                speed: 4.0,
+                ..Params::default()
+            },
+            60,
+            20,
+        );
+        assert_ne!(a, b);
+
+        let mut cached = PreviewSim::new(a, None);
+        let captured = cached.seed;
+        cached.rebuild(b, None);
+        assert_eq!(cached.key, b);
+        assert_eq!(cached.seed, captured);
+
+        let fixed = preview_key(Being::Orb, &Params::default(), 40, 12);
+        let mut seeded = PreviewSim::new(fixed, Some(11));
+        seeded.rebuild(b, Some(11));
+        assert_eq!(seeded.key, b);
+        assert_eq!(seeded.seed, 11);
     }
 
     #[test]
@@ -1270,31 +1452,68 @@ mod tests {
     #[test]
     fn take_key_waits_for_split_escape() {
         let mut buffer = vec![0x1b];
-        assert_eq!(take_key(&mut buffer), None);
+        assert_eq!(take_key(&mut buffer, false), None);
         assert_eq!(buffer, vec![0x1b]);
         buffer.push(b'[');
-        assert_eq!(take_key(&mut buffer), None);
+        assert_eq!(take_key(&mut buffer, false), None);
         assert_eq!(buffer, vec![0x1b, b'[']);
         buffer.push(b'D');
-        assert_eq!(take_key(&mut buffer), Some(Key::Left));
+        assert_eq!(take_key(&mut buffer, false), Some(Key::Left));
         assert!(buffer.is_empty());
     }
 
     #[test]
     fn take_key_resyncs_on_garbage_escape() {
         let mut buffer = vec![0x1b, b'[', b'?'];
-        assert_eq!(take_key(&mut buffer), Some(Key::Other(b'[')));
+        assert_eq!(take_key(&mut buffer, false), Some(Key::Other(b'[')));
         assert_eq!(buffer, vec![b'?']);
-        assert_eq!(take_key(&mut buffer), Some(Key::Other(b'?')));
+        assert_eq!(take_key(&mut buffer, false), Some(Key::Other(b'?')));
         assert!(buffer.is_empty());
     }
 
     #[test]
     fn take_key_drains_multiple_keys() {
         let mut buffer = vec![b'q', b'+'];
-        assert_eq!(take_key(&mut buffer), Some(Key::Q));
-        assert_eq!(take_key(&mut buffer), Some(Key::Plus));
-        assert_eq!(take_key(&mut buffer), None);
+        assert_eq!(take_key(&mut buffer, false), Some(Key::Q));
+        assert_eq!(take_key(&mut buffer, false), Some(Key::Plus));
+        assert_eq!(take_key(&mut buffer, false), None);
+    }
+
+    #[test]
+    fn take_key_times_out_lone_escape() {
+        let mut buffer = vec![0x1b];
+        assert_eq!(take_key(&mut buffer, false), None);
+        assert_eq!(buffer, vec![0x1b]);
+
+        let mut state = MenuState::default();
+        let key = take_key(&mut buffer, true).expect("lone escape times out");
+        assert_eq!(key, Key::Esc);
+        assert!(buffer.is_empty());
+        assert_eq!(on_key(&mut state, key), Some(TableAction::Quit));
+    }
+
+    #[test]
+    fn escape_sequence_arriving_within_a_tick_decodes_arrow() {
+        let mut buffer = vec![0x1b];
+        assert_eq!(take_key(&mut buffer, false), None);
+        buffer.extend_from_slice(b"[A");
+        assert_eq!(take_key(&mut buffer, true), Some(Key::Up));
+        assert!(buffer.is_empty());
+
+        let mut whole = b"\x1b[A".to_vec();
+        assert_eq!(take_key(&mut whole, false), Some(Key::Up));
+        assert!(whole.is_empty());
+    }
+
+    #[test]
+    fn escape_sequence_split_over_two_ticks_still_decodes() {
+        let mut buffer = vec![0x1b];
+        assert_eq!(take_key(&mut buffer, false), None);
+        buffer.push(b'[');
+        assert_eq!(take_key(&mut buffer, true), None);
+        buffer.push(b'A');
+        assert_eq!(take_key(&mut buffer, false), Some(Key::Up));
+        assert!(buffer.is_empty());
     }
 }
 
@@ -1342,7 +1561,7 @@ mod render_tests {
 
     #[test]
     fn preview_border_is_white_on_all_four_edges() {
-        let cells = frame(&blank(), None, W, H);
+        let cells = frame(&blank(), None, W, H, ColorMode::TrueColor);
         let white = Color::Rgb(255, 255, 255);
         for x in 0..40 {
             assert_eq!(at(&cells, W, x, 12).color, white);
@@ -1370,7 +1589,7 @@ mod render_tests {
                 })
                 .collect(),
         };
-        let cells = frame(&blank(), Some(&pv), W, H);
+        let cells = frame(&blank(), Some(&pv), W, H, ColorMode::TrueColor);
         assert_eq!(at(&cells, W, 1, 13).ch, 'a');
         assert_eq!(at(&cells, W, 3, 13).ch, 'c');
         assert_eq!(at(&cells, W, 1, 14).ch, 'd');
@@ -1393,7 +1612,7 @@ mod render_tests {
                 1000
             ],
         };
-        let cells = frame(&blank(), Some(&pv), W, H);
+        let cells = frame(&blank(), Some(&pv), W, H, ColorMode::TrueColor);
         assert_eq!(at(&cells, W, 0, 12).ch, '╭');
         assert_eq!(at(&cells, W, 0, 12).color, Color::Rgb(255, 255, 255));
         assert_eq!(at(&cells, W, 1, 13).ch, '#');
@@ -1403,7 +1622,7 @@ mod render_tests {
 
     #[test]
     fn start_button_sits_inside_the_frame() {
-        let cells = frame(&blank(), None, W, H);
+        let cells = frame(&blank(), None, W, H, ColorMode::TrueColor);
         for (i, ch) in "[ START ]".chars().enumerate() {
             let cell = at(&cells, W, 1 + i, 22);
             assert_eq!(cell.ch, ch, "offset {i}");
@@ -1413,7 +1632,7 @@ mod render_tests {
 
     #[test]
     fn start_button_falls_back_to_screen_corner() {
-        let cells = frame(&blank(), None, 16, 6);
+        let cells = frame(&blank(), None, 16, 6, ColorMode::TrueColor);
         assert_eq!(at(&cells, 16, 0, 5).ch, '[');
         assert_eq!(at(&cells, 16, 2, 5).ch, 'S');
         assert_eq!(at(&cells, 16, 8, 5).ch, ']');
@@ -1421,7 +1640,7 @@ mod render_tests {
 
     #[test]
     fn modes_rows_are_right_aligned() {
-        let cells = frame(&blank(), None, W, H);
+        let cells = frame(&blank(), None, W, H, ColorMode::TrueColor);
         assert_eq!(row_text(&cells, W, 0, 66, 80), "Playlist [off]");
         assert_eq!(row_text(&cells, W, 1, 75, 80), "○ orb");
         assert_eq!(row_text(&cells, W, 2, 71, 80), "○ carrion");
@@ -1433,7 +1652,7 @@ mod render_tests {
             playlist_on: true,
             ..blank()
         };
-        let cells = frame(&state, None, W, H);
+        let cells = frame(&state, None, W, H, ColorMode::TrueColor);
         assert_eq!(row_text(&cells, W, 0, 67, 80), "Playlist [on]");
     }
 
@@ -1443,7 +1662,7 @@ mod render_tests {
             marked: [true, false],
             ..blank()
         };
-        let cells = frame(&state, None, W, H);
+        let cells = frame(&state, None, W, H, ColorMode::TrueColor);
         assert_eq!(at(&cells, W, 75, 1).ch, '▪');
         assert_eq!(at(&cells, W, 71, 2).ch, '○');
 
@@ -1451,14 +1670,14 @@ mod render_tests {
             marked: [false, true],
             ..blank()
         };
-        let cells = frame(&flipped, None, W, H);
+        let cells = frame(&flipped, None, W, H, ColorMode::TrueColor);
         assert_eq!(at(&cells, W, 75, 1).ch, '○');
         assert_eq!(at(&cells, W, 71, 2).ch, '▪');
     }
 
     #[test]
     fn params_column_sits_left_of_modes() {
-        let cells = frame(&blank(), None, W, H);
+        let cells = frame(&blank(), None, W, H, ColorMode::TrueColor);
         assert_eq!(row_text(&cells, W, 0, 57, 66), "speed 1.0");
         assert_eq!(row_text(&cells, W, 1, 56, 66), "trail 0.82");
         assert_eq!(row_text(&cells, W, 2, 57, 66), "size auto");
@@ -1482,7 +1701,7 @@ mod render_tests {
             playlist_on: true,
             ..blank()
         };
-        let cells = frame(&state, None, W, H);
+        let cells = frame(&state, None, W, H, ColorMode::TrueColor);
         assert_eq!(row_text(&cells, W, 0, 57, 66), "speed 2.5");
         assert_eq!(row_text(&cells, W, 1, 56, 66), "trail 0.50");
         assert_eq!(row_text(&cells, W, 2, 59, 66), "size 12");
@@ -1494,7 +1713,7 @@ mod render_tests {
 
     #[test]
     fn interval_row_only_when_playlist_on() {
-        let off = frame(&blank(), None, W, H);
+        let off = frame(&blank(), None, W, H, ColorMode::TrueColor);
         for x in 54..66 {
             assert_eq!(at(&off, W, x, 6), Cell::BLANK);
         }
@@ -1506,13 +1725,14 @@ mod render_tests {
             None,
             W,
             H,
+            ColorMode::TrueColor,
         );
         assert_eq!(row_text(&on, W, 6, 54, 66), "interval 300");
     }
 
     #[test]
     fn wordmark_sits_top_left_in_accent() {
-        let cells = frame(&blank(), None, W, H);
+        let cells = frame(&blank(), None, W, H, ColorMode::TrueColor);
         assert_eq!(row_text(&cells, W, 0, 0, 5), "ORBYN");
         for x in 0..5 {
             assert_eq!(at(&cells, W, x, 0).color, accent());
@@ -1520,10 +1740,32 @@ mod render_tests {
     }
 
     #[test]
+    fn mono_chrome_avoids_rgb_and_truecolor_uses_it() {
+        let mono = frame(&blank(), None, W, H, ColorMode::Mono);
+        assert!(mono
+            .iter()
+            .all(|cell| !matches!(cell.color, Color::Rgb(..))));
+        assert_eq!(at(&mono, W, 0, 0).color, Color::Default);
+        assert_eq!(at(&mono, W, 0, 12).color, Color::Default);
+
+        let truecolor = frame(&blank(), None, W, H, ColorMode::TrueColor);
+        assert!(truecolor
+            .iter()
+            .any(|cell| matches!(cell.color, Color::Rgb(..))));
+        assert_eq!(at(&truecolor, W, 0, 0).color, accent());
+
+        let ansi256 = frame(&blank(), None, W, H, ColorMode::Ansi256);
+        assert_eq!(
+            at(&ansi256, W, 0, 0).color,
+            menu_color(ColorMode::Ansi256, true)
+        );
+    }
+
+    #[test]
     fn focused_rows_use_accent() {
         let mut state = blank();
         state.list_index = 1;
-        let cells = frame(&state, None, W, H);
+        let cells = frame(&state, None, W, H, ColorMode::TrueColor);
         assert_eq!(at(&cells, W, 75, 1).color, accent());
         assert_eq!(at(&cells, W, 66, 0).color, Color::Default);
 
@@ -1532,7 +1774,7 @@ mod render_tests {
             param_index: 0,
             ..blank()
         };
-        let cells = frame(&params, None, W, H);
+        let cells = frame(&params, None, W, H, ColorMode::TrueColor);
         assert_eq!(at(&cells, W, 57, 0).color, accent());
         assert_eq!(at(&cells, W, 75, 1).color, Color::Default);
     }
@@ -1540,7 +1782,7 @@ mod render_tests {
     #[test]
     fn tiny_terminals_never_panic_and_keep_size() {
         for (w, h) in [(16, 6), (1, 1), (0, 0), (3, 2), (10, 3), (24, 8), (19, 24)] {
-            let cells = frame(&blank(), None, w, h);
+            let cells = frame(&blank(), None, w, h, ColorMode::TrueColor);
             assert_eq!(cells.len(), w * h);
         }
     }
@@ -1558,8 +1800,8 @@ mod render_tests {
                 16
             ],
         };
-        let a = frame(&blank(), Some(&pv), W, H);
-        let b = frame(&blank(), Some(&pv), W, H);
+        let a = frame(&blank(), Some(&pv), W, H, ColorMode::TrueColor);
+        let b = frame(&blank(), Some(&pv), W, H, ColorMode::TrueColor);
         assert_eq!(a, b);
     }
 }

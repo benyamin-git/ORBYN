@@ -51,7 +51,7 @@ fn main() {
             if args::should_show_menu(&cfg, io::stdin().is_terminal(), io::stdout().is_terminal()) {
                 let mode = term::resolve(cfg.color);
                 let mut menu_terminal = Terminal::new(mode, cfg.being.unwrap_or(Being::Orb));
-                match menu::run(&mut menu_terminal, &rx, &cfg) {
+                match menu::run(&mut menu_terminal, &rx, &cfg, mode) {
                     Some(req) => {
                         let next = menu::to_config(&req, &cfg);
                         run(&next, &rx)
