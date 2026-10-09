@@ -539,6 +539,19 @@ pub fn preview_cells(being: Being, cfg: &Config, w: usize, h: usize, dt: f32) ->
     term::cells_for(sim.grid(), being, ColorMode::TrueColor)
 }
 
+fn preview_config(params: &Params, seed: Option<u64>) -> Config {
+    Config {
+        seed,
+        speed: params.speed,
+        trail: params.trail,
+        size: params.size,
+        color: params.color,
+        hud: params.hud,
+        fps: params.fps,
+        ..Config::default()
+    }
+}
+
 pub fn drain(rx: &Receiver<Event>) {
     while rx.try_recv().is_ok() {}
 }
@@ -626,7 +639,13 @@ pub fn run(term: &mut term::Terminal, rx: &Receiver<Event>, cfg: &Config) -> Opt
             Some(PreviewFrame {
                 origin: (ix + 1, iy + 1),
                 size: (pw, ph),
-                cells: preview_cells(hovered, cfg, pw, ph, dt),
+                cells: preview_cells(
+                    hovered,
+                    &preview_config(&state.params, cfg.seed),
+                    pw,
+                    ph,
+                    dt,
+                ),
             })
         });
 
@@ -1170,6 +1189,35 @@ mod tests {
         assert_eq!(first, second);
         assert_eq!(first.len(), 30 * 10);
         assert!(first.iter().any(|cell| cell.ch != ' '));
+    }
+
+    #[test]
+    fn preview_tracks_live_parameters() {
+        let seed = Some(7);
+        let dt = 1.0 / 12.0;
+        let auto = Params::default();
+        let sized = Params {
+            size: Some(20.0),
+            ..Params::default()
+        };
+        let auto_cells = preview_cells(Being::Orb, &preview_config(&auto, seed), 60, 20, dt);
+        let sized_cells = preview_cells(Being::Orb, &preview_config(&sized, seed), 60, 20, dt);
+        assert_ne!(auto_cells, sized_cells);
+
+        let again = preview_cells(Being::Orb, &preview_config(&auto, seed), 60, 20, dt);
+        assert_eq!(auto_cells, again);
+
+        let slow = Params {
+            speed: 0.05,
+            ..Params::default()
+        };
+        let fast = Params {
+            speed: 20.0,
+            ..Params::default()
+        };
+        let slow_cells = preview_cells(Being::Orb, &preview_config(&slow, seed), 60, 20, dt);
+        let fast_cells = preview_cells(Being::Orb, &preview_config(&fast, seed), 60, 20, dt);
+        assert_ne!(slow_cells, fast_cells);
     }
 
     #[test]
