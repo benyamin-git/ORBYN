@@ -1,4 +1,5 @@
 mod args;
+mod being;
 mod capture;
 mod carrion;
 mod globe;
