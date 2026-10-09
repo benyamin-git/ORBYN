@@ -98,6 +98,9 @@ impl Config {
         if self.being.is_some() && self.playlist.is_some() {
             return Err("--mode and --playlist cannot be combined".to_string());
         }
+        if self.being.is_some() && self.rotate.is_some() {
+            return Err("--mode and --rotate cannot be combined".to_string());
+        }
         if (self.playlist.is_some() || self.rotate.is_some()) && self.capture.is_some() {
             return Err(
                 "--playlist and --rotate cannot be combined with --snapshot or --cast".to_string(),
@@ -519,6 +522,16 @@ mod tests {
     fn rotation_conflicts_with_capture() {
         assert!(run(&["--playlist", "orb,carrion", "--snapshot"]).is_err());
         assert!(run(&["--rotate", "30", "--cast", "x.cast"]).is_err());
+    }
+
+    #[test]
+    fn mode_conflicts_with_playlist_and_rotation() {
+        assert!(run(&["--mode", "carrion", "--rotate", "30"]).is_err());
+        assert!(run(&["--mode", "carrion", "--playlist", "orb"]).is_err());
+        assert_eq!(
+            config(&["--rotate", "30"]).playlist,
+            Some(Being::all().to_vec())
+        );
     }
 
     #[test]
