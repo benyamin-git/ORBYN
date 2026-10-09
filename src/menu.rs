@@ -1,5 +1,10 @@
-use crate::being::Being;
-use crate::term::{menu_color, Cell, Color, ColorMode};
+use std::sync::mpsc::Receiver;
+use std::time::{Duration, Instant};
+
+use crate::args::Config;
+use crate::being::{Being, Sim};
+use crate::rotation::AUTO_INTERVAL;
+use crate::term::{self, menu_color, Cell, Color, ColorMode, Event};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Key {
@@ -15,7 +20,6 @@ pub enum Key {
     Other(u8),
 }
 
-#[allow(dead_code)]
 pub fn decode(bytes: &[u8]) -> Option<(Key, usize)> {
     let first = *bytes.first()?;
     if first == 0x1b {
@@ -195,7 +199,6 @@ fn list_rows() -> usize {
     1 + Being::all().len()
 }
 
-#[allow(dead_code)]
 pub fn on_key(state: &mut MenuState, key: Key) -> Option<TableAction> {
     match key {
         Key::Q | Key::Esc => Some(TableAction::Quit),
@@ -286,7 +289,6 @@ pub fn on_key(state: &mut MenuState, key: Key) -> Option<TableAction> {
     }
 }
 
-#[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq)]
 pub struct PreviewFrame {
     pub origin: (usize, usize),
@@ -294,7 +296,6 @@ pub struct PreviewFrame {
     pub cells: Vec<Cell>,
 }
 
-#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MenuRects {
     pub preview: Option<(usize, usize, usize, usize)>,
@@ -303,7 +304,6 @@ pub struct MenuRects {
     pub start: (usize, usize),
 }
 
-#[allow(dead_code)]
 fn color_name(mode: ColorMode) -> &'static str {
     match mode {
         ColorMode::Auto => "auto",
@@ -314,7 +314,6 @@ fn color_name(mode: ColorMode) -> &'static str {
     }
 }
 
-#[allow(dead_code)]
 fn param_text(row: ParamRow, params: &Params) -> String {
     match row {
         ParamRow::Speed => format!("speed {:.1}", params.speed),
@@ -330,7 +329,6 @@ fn param_text(row: ParamRow, params: &Params) -> String {
     }
 }
 
-#[allow(dead_code)]
 pub fn layout(w: usize, h: usize) -> MenuRects {
     let half_w = w / 2;
     let half_h = h / 2;
@@ -364,7 +362,6 @@ pub fn layout(w: usize, h: usize) -> MenuRects {
     }
 }
 
-#[allow(dead_code)]
 fn put(buf: &mut [Cell], w: usize, h: usize, x: usize, y: usize, s: &str, color: Color) {
     if w == 0 || y >= h {
         return;
@@ -377,7 +374,6 @@ fn put(buf: &mut [Cell], w: usize, h: usize, x: usize, y: usize, s: &str, color:
     }
 }
 
-#[allow(dead_code)]
 fn put_right(buf: &mut [Cell], w: usize, h: usize, end: usize, y: usize, s: &str, color: Color) {
     if w == 0 || end == 0 || y >= h {
         return;
@@ -392,7 +388,6 @@ fn put_right(buf: &mut [Cell], w: usize, h: usize, end: usize, y: usize, s: &str
     }
 }
 
-#[allow(dead_code)]
 pub fn frame(state: &MenuState, preview: Option<&PreviewFrame>, w: usize, h: usize) -> Vec<Cell> {
     let mut buf = vec![Cell::BLANK; w.saturating_mul(h)];
     if w == 0 || h == 0 {
@@ -498,6 +493,177 @@ pub fn frame(state: &MenuState, preview: Option<&PreviewFrame>, w: usize, h: usi
     put(&mut buf, w, h, sx, sy, "[ START ]", accent);
 
     buf
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct RunRequest {
+    pub single: Option<Being>,
+    pub playlist: Option<Vec<Being>>,
+    pub interval: Option<f32>,
+    pub params: Params,
+}
+
+impl Params {
+    pub fn from_cfg(cfg: &Config) -> Self {
+        Self {
+            speed: cfg.speed,
+            trail: cfg.trail,
+            size: cfg.size,
+            color: cfg.color,
+            fps: cfg.fps,
+            hud: cfg.hud,
+            interval: cfg.rotate.unwrap_or(AUTO_INTERVAL),
+        }
+    }
+}
+
+pub fn to_config(req: &RunRequest, base: &Config) -> Config {
+    let mut cfg = base.clone();
+    cfg.being = req.single;
+    cfg.playlist = req.playlist.clone();
+    cfg.rotate = req.interval;
+    cfg.speed = req.params.speed;
+    cfg.trail = req.params.trail;
+    cfg.size = req.params.size;
+    cfg.color = req.params.color;
+    cfg.fps = req.params.fps;
+    cfg.hud = req.params.hud;
+    cfg
+}
+
+pub fn preview_cells(being: Being, cfg: &Config, w: usize, h: usize, dt: f32) -> Vec<Cell> {
+    let mut sim = Sim::new(being, cfg, w, h);
+    for _ in 0..12 {
+        sim.update(dt, w, h);
+    }
+    term::cells_for(sim.grid(), being, ColorMode::TrueColor)
+}
+
+pub fn drain(rx: &Receiver<Event>) {
+    while rx.try_recv().is_ok() {}
+}
+
+fn hovered_being(state: &MenuState, cfg: &Config) -> Being {
+    if state.list_index == 0 {
+        cfg.being.unwrap_or(Being::Orb)
+    } else {
+        Being::all()
+            .get(state.list_index - 1)
+            .copied()
+            .unwrap_or(Being::Orb)
+    }
+}
+
+fn run_request(state: &MenuState, cfg: &Config) -> RunRequest {
+    if state.playlist_on {
+        let marked: Vec<Being> = Being::all()
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| state.marked[*index])
+            .map(|(_, being)| *being)
+            .collect();
+        let playlist = if marked.is_empty() {
+            Being::all().to_vec()
+        } else {
+            marked
+        };
+        RunRequest {
+            single: None,
+            playlist: Some(playlist),
+            interval: Some(state.params.interval),
+            params: state.params.clone(),
+        }
+    } else {
+        RunRequest {
+            single: Some(hovered_being(state, cfg)),
+            playlist: None,
+            interval: None,
+            params: state.params.clone(),
+        }
+    }
+}
+
+fn take_key(buffer: &mut Vec<u8>) -> Option<Key> {
+    loop {
+        if buffer.is_empty() {
+            return None;
+        }
+        if buffer[0] == 0x1b && buffer.len() < 3 {
+            return None;
+        }
+        match decode(buffer) {
+            Some((key, n)) => {
+                buffer.drain(..n);
+                return Some(key);
+            }
+            None => {
+                buffer.remove(0);
+            }
+        }
+    }
+}
+
+pub fn run(term: &mut term::Terminal, rx: &Receiver<Event>, cfg: &Config) -> Option<RunRequest> {
+    let mut state = MenuState {
+        params: Params::from_cfg(cfg),
+        ..MenuState::default()
+    };
+    let dt = 1.0f32 / 12.0;
+    let frame_time = Duration::from_secs_f32(dt);
+    let mut buffer = Vec::new();
+
+    loop {
+        let frame_start = Instant::now();
+        let (w, h) = term.sync().ok()?;
+        let hovered = hovered_being(&state, cfg);
+
+        let preview = layout(w, h).preview.and_then(|(ix, iy, iw, ih)| {
+            let pw = iw.saturating_sub(2);
+            let ph = ih.saturating_sub(2);
+            if pw == 0 || ph == 0 {
+                return None;
+            }
+            Some(PreviewFrame {
+                origin: (ix + 1, iy + 1),
+                size: (pw, ph),
+                cells: preview_cells(hovered, cfg, pw, ph, dt),
+            })
+        });
+
+        let cells = frame(&state, preview.as_ref(), w, h);
+        let _ = term.draw_cells(&cells);
+
+        while let Ok(event) = rx.try_recv() {
+            match event {
+                Event::Eof => {
+                    term.restore();
+                    return None;
+                }
+                Event::Key(byte) => buffer.push(byte),
+            }
+        }
+
+        while let Some(key) = take_key(&mut buffer) {
+            match on_key(&mut state, key) {
+                Some(TableAction::Quit) => {
+                    term.restore();
+                    return None;
+                }
+                Some(TableAction::Run) => {
+                    let request = run_request(&state, cfg);
+                    drain(rx);
+                    term.restore();
+                    return Some(request);
+                }
+                _ => {}
+            }
+        }
+
+        let elapsed = frame_start.elapsed();
+        if elapsed < frame_time {
+            std::thread::sleep(frame_time - elapsed);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -909,6 +1075,178 @@ mod tests {
             params.adjust(ParamRow::Interval, -1);
         }
         assert_eq!(params.interval, 1.0);
+    }
+
+    fn base_cfg() -> Config {
+        Config {
+            seed: Some(7),
+            ..Config::default()
+        }
+    }
+
+    fn full_params() -> Params {
+        Params {
+            speed: 2.0,
+            trail: 0.5,
+            size: Some(9.0),
+            color: ColorMode::Ansi256,
+            fps: 60,
+            hud: 3,
+            interval: 30.0,
+        }
+    }
+
+    #[test]
+    fn to_config_playlist_request_sets_rotation_and_params() {
+        let base = base_cfg();
+        let req = RunRequest {
+            single: None,
+            playlist: Some(vec![Being::Carrion, Being::Orb]),
+            interval: Some(30.0),
+            params: full_params(),
+        };
+        let cfg = to_config(&req, &base);
+        assert_eq!(cfg.being, None);
+        assert_eq!(cfg.playlist, Some(vec![Being::Carrion, Being::Orb]));
+        assert_eq!(cfg.rotate, Some(30.0));
+        assert_eq!(cfg.speed, 2.0);
+        assert_eq!(cfg.trail, 0.5);
+        assert_eq!(cfg.size, Some(9.0));
+        assert_eq!(cfg.color, ColorMode::Ansi256);
+        assert_eq!(cfg.fps, 60);
+        assert_eq!(cfg.hud, 3);
+        assert_eq!(cfg.seed, Some(7));
+    }
+
+    #[test]
+    fn to_config_single_request_clears_rotation() {
+        let base = base_cfg();
+        let req = RunRequest {
+            single: Some(Being::Carrion),
+            playlist: None,
+            interval: None,
+            params: Params::from_cfg(&base),
+        };
+        let cfg = to_config(&req, &base);
+        assert_eq!(cfg.being, Some(Being::Carrion));
+        assert!(cfg.playlist.is_none());
+        assert!(cfg.rotate.is_none());
+    }
+
+    #[test]
+    fn from_cfg_copies_cli_params() {
+        let cfg = Config {
+            speed: 2.0,
+            trail: 0.4,
+            size: Some(5.0),
+            color: ColorMode::Mono,
+            fps: 45,
+            hud: 0,
+            rotate: Some(30.0),
+            ..Config::default()
+        };
+        let params = Params::from_cfg(&cfg);
+        assert_eq!(params.speed, 2.0);
+        assert_eq!(params.trail, 0.4);
+        assert_eq!(params.size, Some(5.0));
+        assert_eq!(params.color, ColorMode::Mono);
+        assert_eq!(params.fps, 45);
+        assert_eq!(params.hud, 0);
+        assert_eq!(params.interval, 30.0);
+    }
+
+    #[test]
+    fn from_cfg_defaults_interval_to_auto() {
+        let params = Params::from_cfg(&Config::default());
+        assert_eq!(params.interval, AUTO_INTERVAL);
+    }
+
+    #[test]
+    fn preview_cells_are_deterministic_and_sized() {
+        let cfg = base_cfg();
+        let dt = 1.0 / 12.0;
+        let first = preview_cells(Being::Orb, &cfg, 30, 10, dt);
+        let second = preview_cells(Being::Orb, &cfg, 30, 10, dt);
+        assert_eq!(first, second);
+        assert_eq!(first.len(), 30 * 10);
+        assert!(first.iter().any(|cell| cell.ch != ' '));
+    }
+
+    #[test]
+    fn drain_empties_the_channel() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        tx.send(Event::Key(b'q')).expect("send");
+        tx.send(Event::Key(b'+')).expect("send");
+        tx.send(Event::Eof).expect("send");
+        drain(&rx);
+        assert_eq!(rx.try_recv(), Err(std::sync::mpsc::TryRecvError::Empty));
+    }
+
+    #[test]
+    fn hovered_being_tracks_list_index() {
+        let cfg = Config::default();
+        let mut state = MenuState::default();
+        assert_eq!(hovered_being(&state, &cfg), Being::Orb);
+        state.list_index = 1;
+        assert_eq!(hovered_being(&state, &cfg), Being::Orb);
+        state.list_index = 2;
+        assert_eq!(hovered_being(&state, &cfg), Being::Carrion);
+    }
+
+    #[test]
+    fn run_request_assembles_single_and_playlist() {
+        let cfg = Config {
+            being: Some(Being::Orb),
+            ..Config::default()
+        };
+        let single = run_request(&MenuState::default(), &cfg);
+        assert_eq!(single.single, Some(Being::Orb));
+        assert!(single.playlist.is_none());
+        assert!(single.interval.is_none());
+
+        let mut marked = MenuState {
+            playlist_on: true,
+            marked: [false, true],
+            ..MenuState::default()
+        };
+        let req = run_request(&marked, &cfg);
+        assert_eq!(req.single, None);
+        assert_eq!(req.playlist, Some(vec![Being::Carrion]));
+        assert_eq!(req.interval, Some(marked.params.interval));
+
+        marked.marked = [false, false];
+        let req = run_request(&marked, &cfg);
+        assert_eq!(req.playlist, Some(Being::all().to_vec()));
+    }
+
+    #[test]
+    fn take_key_waits_for_split_escape() {
+        let mut buffer = vec![0x1b];
+        assert_eq!(take_key(&mut buffer), None);
+        assert_eq!(buffer, vec![0x1b]);
+        buffer.push(b'[');
+        assert_eq!(take_key(&mut buffer), None);
+        assert_eq!(buffer, vec![0x1b, b'[']);
+        buffer.push(b'D');
+        assert_eq!(take_key(&mut buffer), Some(Key::Left));
+        assert!(buffer.is_empty());
+    }
+
+    #[test]
+    fn take_key_resyncs_on_garbage_escape() {
+        let mut buffer = vec![0x1b, b'[', b'?'];
+        assert_eq!(take_key(&mut buffer), Some(Key::Other(b'[')));
+        assert_eq!(buffer, vec![b'?']);
+        assert_eq!(take_key(&mut buffer), Some(Key::Other(b'?')));
+        assert!(buffer.is_empty());
+    }
+
+    #[test]
+    fn take_key_drains_multiple_keys() {
+        let mut buffer = vec![b'q', b'+'];
+        assert_eq!(take_key(&mut buffer), Some(Key::Q));
+        assert_eq!(take_key(&mut buffer), Some(Key::Plus));
+        assert_eq!(take_key(&mut buffer), None);
     }
 }
 

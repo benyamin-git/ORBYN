@@ -131,7 +131,6 @@ fn indexed_code(v: f32) -> u8 {
     16 + 36 * q(r) + 6 * q(g) + q(b)
 }
 
-#[allow(dead_code)]
 pub fn menu_color(mode: ColorMode, accent: bool) -> Color {
     if !accent {
         return Color::Default;

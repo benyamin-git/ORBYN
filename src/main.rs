@@ -10,6 +10,7 @@ mod rotation;
 mod scene;
 mod term;
 
+use std::io::{self, IsTerminal};
 use std::time::{Duration, Instant};
 
 use args::{Action, Config};
@@ -45,7 +46,22 @@ fn main() {
 
     let result = match &cfg.capture {
         Some(capture) => capture::run(&cfg, capture),
-        None => run(&cfg),
+        None => {
+            let rx = term::input_events();
+            if args::should_show_menu(&cfg, io::stdin().is_terminal(), io::stdout().is_terminal()) {
+                let mode = term::resolve(cfg.color);
+                let mut menu_terminal = Terminal::new(mode, cfg.being.unwrap_or(Being::Orb));
+                match menu::run(&mut menu_terminal, &rx, &cfg) {
+                    Some(req) => {
+                        let next = menu::to_config(&req, &cfg);
+                        run(&next, &rx)
+                    }
+                    None => Ok(()),
+                }
+            } else {
+                run(&cfg, &rx)
+            }
+        }
     };
 
     if let Err(err) = result {
@@ -64,12 +80,11 @@ fn swap_to(sim: &mut Sim, next: Being, c: &Config, w: usize, h: usize, session_p
     }
 }
 
-fn run(cfg: &Config) -> std::io::Result<()> {
+fn run(cfg: &Config, rx: &std::sync::mpsc::Receiver<Event>) -> std::io::Result<()> {
     let mode = term::resolve(cfg.color);
     let rotation = rotation::rotation_for(cfg);
     let mut current_kind = rotation::resolve_start_kind(cfg.being, rotation.as_ref());
     let mut terminal = Terminal::new(mode, current_kind);
-    let events = term::input_events();
 
     let (mut w, mut h) = terminal.sync()?;
     let mut sim = Sim::new(current_kind, cfg, w, h);
@@ -88,7 +103,7 @@ fn run(cfg: &Config) -> std::io::Result<()> {
 
         let mut quit = false;
         let mut manual = false;
-        while let Ok(event) = events.try_recv() {
+        while let Ok(event) = rx.try_recv() {
             match event {
                 Event::Eof => {
                     quit = true;

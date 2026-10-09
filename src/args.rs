@@ -191,7 +191,6 @@ pub fn normalize_playlist(names: &str) -> Result<Vec<Being>, String> {
     Ok(out)
 }
 
-#[allow(dead_code)]
 pub fn should_show_menu(cfg: &Config, stdin_tty: bool, stdout_tty: bool) -> bool {
     if cfg.capture.is_some() {
         return false;
