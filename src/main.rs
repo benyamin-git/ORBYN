@@ -11,12 +11,12 @@ mod term;
 use std::time::{Duration, Instant};
 
 use args::{Action, Config};
-use carrion::Carrion;
+use being::{Being, Sim};
 use globe::Globe;
 use hud::Hud;
 use rng::Rng;
 use scene::Grid;
-use term::{Event, Terminal, Visual};
+use term::{Event, Terminal};
 
 pub const ASPECT: f32 = 2.0;
 
@@ -54,11 +54,12 @@ fn main() {
 
 fn run(cfg: &Config) -> std::io::Result<()> {
     let mode = term::resolve(cfg.color);
-    let mut terminal = Terminal::new(mode, cfg.visual);
+    let being = cfg.being.unwrap_or(Being::Orb);
+    let mut terminal = Terminal::new(mode, being);
     let events = term::input_events();
 
     let (mut w, mut h) = terminal.sync()?;
-    let mut sim = Sim::new(cfg, w, h);
+    let mut sim = Sim::new(being, cfg, w, h);
     let frame = Duration::from_secs_f32(1.0 / cfg.fps as f32);
     let mut last = Instant::now();
 
@@ -114,76 +115,6 @@ fn run(cfg: &Config) -> std::io::Result<()> {
 
     terminal.restore();
     Ok(())
-}
-
-enum Sim {
-    Orb(Box<App>),
-    Carrion(Box<Carrion>),
-}
-
-impl Sim {
-    fn new(cfg: &Config, w: usize, h: usize) -> Self {
-        match cfg.visual {
-            Visual::Orb => Sim::Orb(Box::new(App::new(cfg, w, h))),
-            Visual::Carrion => Sim::Carrion(Box::new(Carrion::new(cfg, w, h))),
-        }
-    }
-
-    fn update(&mut self, dt: f32, w: usize, h: usize) {
-        match self {
-            Sim::Orb(app) => app.update(dt, w, h),
-            Sim::Carrion(carrion) => carrion.update(dt, w, h),
-        }
-    }
-
-    fn resize(&mut self, w: usize, h: usize) {
-        match self {
-            Sim::Orb(app) => app.resize(w, h),
-            Sim::Carrion(carrion) => carrion.resize(w, h),
-        }
-    }
-
-    fn show_too_small(&mut self, w: usize, h: usize) {
-        match self {
-            Sim::Orb(app) => app.show_too_small(w, h),
-            Sim::Carrion(carrion) => carrion.show_too_small(w, h),
-        }
-    }
-
-    fn toggle_overlay(&mut self) {
-        match self {
-            Sim::Orb(app) => app.toggle_hud(),
-            Sim::Carrion(carrion) => carrion.toggle_detail(),
-        }
-    }
-
-    fn toggle_pause(&mut self) {
-        match self {
-            Sim::Orb(app) => app.paused = !app.paused,
-            Sim::Carrion(carrion) => carrion.toggle_pause(),
-        }
-    }
-
-    fn paused(&self) -> bool {
-        match self {
-            Sim::Orb(app) => app.paused,
-            Sim::Carrion(carrion) => carrion.paused(),
-        }
-    }
-
-    fn adjust_speed(&mut self, ratio: f32) {
-        match self {
-            Sim::Orb(app) => app.adjust_speed(ratio),
-            Sim::Carrion(carrion) => carrion.adjust_speed(ratio),
-        }
-    }
-
-    fn grid(&self) -> &Grid {
-        match self {
-            Sim::Orb(app) => &app.grid,
-            Sim::Carrion(carrion) => carrion.grid(),
-        }
-    }
 }
 
 struct Orb {

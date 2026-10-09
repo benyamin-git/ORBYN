@@ -4,13 +4,8 @@ use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
 
+use crate::being::Being;
 use crate::scene::{Grid, Tone, CUTOFF};
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Visual {
-    Orb,
-    Carrion,
-}
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ColorMode {
@@ -193,12 +188,12 @@ fn orb_cell(v: f32, ch: u8, mode: ColorMode) -> Cell {
     }
 }
 
-pub fn cells_for(grid: &Grid, visual: Visual, mode: ColorMode) -> Vec<Cell> {
+pub fn cells_for(grid: &Grid, being: Being, mode: ColorMode) -> Vec<Cell> {
     grid.data
         .iter()
-        .map(|cell| match visual {
-            Visual::Orb => orb_cell(cell.v, cell.ch, mode),
-            Visual::Carrion => carrion_cell(cell, mode),
+        .map(|cell| match being {
+            Being::Orb => orb_cell(cell.v, cell.ch, mode),
+            Being::Carrion => carrion_cell(cell, mode),
         })
         .collect()
 }
@@ -417,9 +412,8 @@ fn tty_cmd(args: &[&str]) -> Option<String> {
 
 pub struct Terminal {
     mode: ColorMode,
-    visual: Visual,
+    being: Being,
     renderer: Renderer,
-    cells: Vec<Cell>,
     w: usize,
     h: usize,
     saved_stty: Option<String>,
@@ -427,7 +421,7 @@ pub struct Terminal {
 }
 
 impl Terminal {
-    pub fn new(mode: ColorMode, visual: Visual) -> Self {
+    pub fn new(mode: ColorMode, being: Being) -> Self {
         install_signal_handlers();
         let interactive = io::stdin().is_terminal() && io::stdout().is_terminal();
         let saved_stty = if interactive { tty_cmd(&["-g"]) } else { None };
@@ -436,26 +430,33 @@ impl Terminal {
         }
 
         let mut stdout = io::stdout();
-        let title: &[u8] = match visual {
-            Visual::Orb => b"\x1b[?1049h\x1b[?25l\x1b[2J\x1b[H\x1b]0;ORBYN\x1b\\",
-            Visual::Carrion => b"\x1b[?1049h\x1b[?25l\x1b[2J\x1b[H\x1b]0;ORBYN // CARRION\x1b\\",
-        };
-        let _ = stdout.write_all(title);
+        let _ = stdout.write_all(b"\x1b[?1049h\x1b[?25l\x1b[2J\x1b[H");
         let _ = stdout.flush();
 
         let (w, h) = window_size();
         let mut renderer = Renderer::new();
         renderer.reset(w, h);
-        Self {
+        let mut terminal = Self {
             mode,
-            visual,
+            being,
             renderer,
-            cells: Vec::new(),
             w,
             h,
             saved_stty,
             restored: false,
-        }
+        };
+        terminal.set_title(being);
+        terminal
+    }
+
+    pub fn set_title(&mut self, being: Being) {
+        let title: &[u8] = match being {
+            Being::Orb => b"\x1b]0;ORBYN\x1b\\",
+            Being::Carrion => b"\x1b]0;ORBYN // CARRION\x1b\\",
+        };
+        let mut stdout = io::stdout();
+        let _ = stdout.write_all(title);
+        let _ = stdout.flush();
     }
 
     pub fn sync(&mut self) -> io::Result<(usize, usize)> {
@@ -472,10 +473,13 @@ impl Terminal {
     }
 
     pub fn draw(&mut self, grid: &Grid) -> io::Result<()> {
-        self.cells = cells_for(grid, self.visual, self.mode);
+        let cells = cells_for(grid, self.being, self.mode);
+        self.draw_cells(&cells)
+    }
 
+    pub fn draw_cells(&mut self, cells: &[Cell]) -> io::Result<()> {
         let mut buf = Vec::with_capacity(1024);
-        self.renderer.present(&self.cells, &mut buf);
+        self.renderer.present(cells, &mut buf);
         if !buf.is_empty() {
             let mut stdout = io::stdout();
             stdout.write_all(&buf)?;
@@ -672,11 +676,11 @@ mod tests {
     }
 
     #[test]
-    fn cells_for_matches_visual() {
+    fn cells_for_matches_being() {
         let mut grid = Grid::new(2, 1);
         grid.stamp(0, 0, 1.0);
-        let orb = cells_for(&grid, Visual::Orb, ColorMode::TrueColor);
-        let carrion = cells_for(&grid, Visual::Carrion, ColorMode::TrueColor);
+        let orb = cells_for(&grid, Being::Orb, ColorMode::TrueColor);
+        let carrion = cells_for(&grid, Being::Carrion, ColorMode::TrueColor);
         assert_eq!(orb.len(), 2);
         assert_eq!(carrion.len(), 2);
         assert_eq!(orb[0].ch, '@');

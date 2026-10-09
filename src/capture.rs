@@ -2,18 +2,19 @@ use std::fs::File;
 use std::io::{self, BufWriter, Write};
 
 use crate::args::{Capture, Config};
+use crate::being::{Being, Sim};
 use crate::term::{self, ColorMode, Renderer};
-use crate::Sim;
 
 pub const DEFAULT_COLS: usize = 100;
 pub const DEFAULT_ROWS: usize = 30;
 
 pub fn run(cfg: &Config, capture: &Capture) -> io::Result<()> {
     let mode = color_mode(cfg.color);
+    let being = cfg.being.unwrap_or(Being::Orb);
     let w = cfg.cols.unwrap_or(DEFAULT_COLS);
     let h = cfg.rows.unwrap_or(DEFAULT_ROWS);
     let dt = 1.0 / cfg.fps as f32;
-    let mut sim = Sim::new(cfg, w, h);
+    let mut sim = Sim::new(being, cfg, w, h);
 
     for _ in 0..frames(cfg.warmup, cfg.fps) {
         sim.update(dt, w, h);
@@ -21,14 +22,14 @@ pub fn run(cfg: &Config, capture: &Capture) -> io::Result<()> {
 
     match capture {
         Capture::Snapshot => {
-            let bytes = snapshot(&mut sim, cfg, mode, dt);
+            let bytes = snapshot(&mut sim, cfg, being, mode, dt);
             let mut stdout = io::stdout().lock();
             stdout.write_all(&bytes)?;
             stdout.flush()
         }
         Capture::Cast(path) => {
             let mut out = BufWriter::new(File::create(path)?);
-            record(&mut sim, cfg, mode, dt, &mut out)?;
+            record(&mut sim, cfg, being, mode, dt, &mut out)?;
             out.flush()
         }
     }
@@ -45,18 +46,19 @@ fn frames(seconds: f32, fps: u32) -> u32 {
     (seconds * fps as f32).round() as u32
 }
 
-fn snapshot(sim: &mut Sim, cfg: &Config, mode: ColorMode, dt: f32) -> Vec<u8> {
+fn snapshot(sim: &mut Sim, cfg: &Config, being: Being, mode: ColorMode, dt: f32) -> Vec<u8> {
     let (w, h) = (sim.grid().w, sim.grid().h);
     for _ in 0..frames(cfg.duration, cfg.fps).max(1) {
         sim.update(dt, w, h);
     }
-    let cells = term::cells_for(sim.grid(), cfg.visual, mode);
+    let cells = term::cells_for(sim.grid(), being, mode);
     term::snapshot_ansi(&cells, w)
 }
 
 fn record(
     sim: &mut Sim,
     cfg: &Config,
+    being: Being,
     mode: ColorMode,
     dt: f32,
     out: &mut impl Write,
@@ -76,7 +78,7 @@ fn record(
 
     for i in 0..frames(cfg.duration, cfg.fps).max(1) {
         sim.update(dt, w, h);
-        let cells = term::cells_for(sim.grid(), cfg.visual, mode);
+        let cells = term::cells_for(sim.grid(), being, mode);
         diff.clear();
         renderer.present(&cells, &mut diff);
         if diff.is_empty() {
@@ -138,10 +140,10 @@ mod tests {
     fn snapshot_is_deterministic_and_full_screen() {
         let cfg = cfg();
         let dt = 1.0 / cfg.fps as f32;
-        let mut a = Sim::new(&cfg, 40, 12);
-        let first = snapshot(&mut a, &cfg, ColorMode::TrueColor, dt);
-        let mut b = Sim::new(&cfg, 40, 12);
-        let second = snapshot(&mut b, &cfg, ColorMode::TrueColor, dt);
+        let mut a = Sim::new(Being::Orb, &cfg, 40, 12);
+        let first = snapshot(&mut a, &cfg, Being::Orb, ColorMode::TrueColor, dt);
+        let mut b = Sim::new(Being::Orb, &cfg, 40, 12);
+        let second = snapshot(&mut b, &cfg, Being::Orb, ColorMode::TrueColor, dt);
         assert_eq!(first, second);
 
         let text = String::from_utf8(first).expect("ascii output");
@@ -153,9 +155,17 @@ mod tests {
     fn record_writes_asciicast_v2() {
         let cfg = cfg();
         let dt = 1.0 / cfg.fps as f32;
-        let mut sim = Sim::new(&cfg, 40, 12);
+        let mut sim = Sim::new(Being::Orb, &cfg, 40, 12);
         let mut out = Vec::new();
-        record(&mut sim, &cfg, ColorMode::TrueColor, dt, &mut out).expect("record");
+        record(
+            &mut sim,
+            &cfg,
+            Being::Orb,
+            ColorMode::TrueColor,
+            dt,
+            &mut out,
+        )
+        .expect("record");
 
         let text = String::from_utf8(out).expect("utf8");
         let mut lines = text.lines();
@@ -182,9 +192,17 @@ mod tests {
         let cfg = cfg();
         let dt = 1.0 / cfg.fps as f32;
         let run = || {
-            let mut sim = Sim::new(&cfg, 40, 12);
+            let mut sim = Sim::new(Being::Orb, &cfg, 40, 12);
             let mut out = Vec::new();
-            record(&mut sim, &cfg, ColorMode::TrueColor, dt, &mut out).expect("record");
+            record(
+                &mut sim,
+                &cfg,
+                Being::Orb,
+                ColorMode::TrueColor,
+                dt,
+                &mut out,
+            )
+            .expect("record");
             out
         };
         assert_eq!(run(), run());

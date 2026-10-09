@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
-use crate::term::{ColorMode, Visual};
+use crate::being::Being;
+use crate::term::ColorMode;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -19,7 +20,7 @@ pub struct Config {
     pub color: ColorMode,
     pub hud: u32,
     pub seed: Option<u64>,
-    pub visual: Visual,
+    pub being: Option<Being>,
     pub capture: Option<Capture>,
     pub cols: Option<usize>,
     pub rows: Option<usize>,
@@ -37,7 +38,7 @@ impl Default for Config {
             color: ColorMode::Auto,
             hud: 6,
             seed: None,
-            visual: Visual::Orb,
+            being: None,
             capture: None,
             cols: None,
             rows: None,
@@ -99,6 +100,9 @@ pub enum Action {
 }
 
 pub fn usage() -> String {
+    let orb_desc = Being::Orb.description();
+    let carrion_name = Being::Carrion.name();
+    let carrion_desc = Being::Carrion.description();
     format!(
         "\
 ORBYN {VERSION}
@@ -108,8 +112,8 @@ USAGE:
     orbyn [OPTIONS]
 
 MODES:
-        (default)         Blue wireframe orb
-    -carrion, --carrion   Red flesh creature with dark brain folds
+        (default)         {orb_desc}
+    -{carrion_name}, --{carrion_name}   {carrion_desc}
 
 OPTIONS:
     -s, --speed <FLOAT>   Motion speed multiplier [default: 1.0]
@@ -165,7 +169,7 @@ where
                 continue;
             }
             "-carrion" | "--carrion" => {
-                cfg.visual = Visual::Carrion;
+                cfg.being = Being::from_name(name.trim_start_matches('-'));
                 continue;
             }
             _ => {}
@@ -304,16 +308,16 @@ mod tests {
     }
 
     #[test]
-    fn visual_defaults_to_orb() {
-        assert_eq!(config(&[]).visual, Visual::Orb);
+    fn being_defaults_to_none() {
+        assert_eq!(config(&[]).being, None);
     }
 
     #[test]
     fn carrion_flag_parses_in_both_forms() {
-        assert_eq!(config(&["-carrion"]).visual, Visual::Carrion);
-        assert_eq!(config(&["--carrion"]).visual, Visual::Carrion);
+        assert_eq!(config(&["-carrion"]).being, Some(Being::Carrion));
+        assert_eq!(config(&["--carrion"]).being, Some(Being::Carrion));
         let cfg = config(&["--carrion", "--fps", "60", "--seed", "4"]);
-        assert_eq!(cfg.visual, Visual::Carrion);
+        assert_eq!(cfg.being, Some(Being::Carrion));
         assert_eq!(cfg.fps, 60);
         assert_eq!(cfg.seed, Some(4));
     }
