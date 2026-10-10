@@ -1,9 +1,9 @@
 # orbyn
 
 ORBYN is a terminal screensaver that moves bright pixels around the screen to
-prevent burn-in on displays left showing a static terminal. It has two visuals:
-a blue wireframe orb by default, and a red flesh creature selected with
-`-carrion`.
+prevent burn-in on displays left showing a static terminal. It has three
+visuals: a blue wireframe orb by default, a red flesh creature selected with
+`-carrion`, and a dark-red ASCII worm selected with `-worm`.
 
 > AI disclaimer: this project was written with AI assistance; review the code
 > before relying on it.
@@ -11,12 +11,16 @@ a blue wireframe orb by default, and a red flesh creature selected with
 <p align="center">
   <img src="assets/orb.gif" alt="ORBYN orb drifting in a terminal" width="420">
   <img src="assets/carrion.gif" alt="ORBYN carrion creature drifting in a terminal" width="420">
+  <img src="assets/worm.gif" alt="ORBYN worm curling in a terminal" width="420">
 </p>
 
 The orb bounces around the screen with fading cmatrix-style trails, organic
 energy bursts, and drifting telemetry text. `-carrion` replaces it with a red
 flesh creature that has dark grey brain folds, a fading gore trail, and a
-Crawl/Grip/Lunge motion cycle. Color output falls back automatically from
+Crawl/Grip/Lunge motion cycle. `-worm` replaces it with a single dark-red ASCII
+worm that curls in slow traveling waves, shimmers between dark, mid, and bright
+red characters, and wraps around the screen edges. Color output falls back
+automatically from
 truecolor to 256, 16, or mono according to the terminal, `COLORTERM`, `TERM`,
 and `NO_COLOR`.
 
@@ -53,6 +57,7 @@ Skip the menu and start immediately with `--run`, or pick a mode up front:
 orbyn --run          # start the default orb immediately, no menu
 orbyn --mode carrion # named mode
 orbyn -carrion       # shorthand for the carrion mode
+orbyn -worm          # shorthand for the worm mode
 ```
 
 Direct runs apply every option below and use the run-phase keys:
@@ -61,7 +66,7 @@ Direct runs apply every option below and use the run-phase keys:
 | --- | --- |
 | `q`, `Ctrl-C`, `Ctrl-D` | quit |
 | `space` | pause |
-| `h` | toggle telemetry (orb) or body detail (carrion) |
+| `h` | toggle telemetry (orb) or body detail (carrion, worm) |
 | `n` | swap to the next being now |
 | `+`, `=` / `-`, `_` | speed up / slow down |
 
@@ -94,6 +99,7 @@ Use a dark terminal theme.
 | `--rotate <SECS>` | Seconds between rotation swaps | `300` |
 | `--run` | Skip the menu and start immediately | off |
 | `-carrion`, `--carrion` | Use the red flesh creature instead of the orb | orb |
+| `-worm`, `--worm` | Use the dark-red ASCII worm instead of the orb | orb |
 | `-s`, `--speed <FLOAT>` | Motion speed multiplier, 0.05–20.0 | `1.0` |
 | `--fps <N>` | Frames per second, 1–240 | `30` |
 | `--size <ROWS>` | Body radius in text rows, 1–60 | auto |
@@ -116,9 +122,9 @@ orbyn -carrion --cast carrion.cast --duration 5
 
 ## Samples
 
-`scripts/samples.sh` regenerates `assets/orb.gif` and `assets/carrion.gif` from
-fixed seeds, using `--cast` and [agg](https://github.com/asciinema/agg). It
-requires `agg`:
+`scripts/samples.sh` regenerates `assets/orb.gif`, `assets/carrion.gif`, and
+`assets/worm.gif` from fixed seeds, using `--cast` and
+[agg](https://github.com/asciinema/agg). It requires `agg`:
 
 ```sh
 cargo install --git https://github.com/asciinema/agg

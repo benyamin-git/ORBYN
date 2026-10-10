@@ -17,9 +17,11 @@ WARMUP="${WARMUP:-3.0}"
 DURATION="${DURATION:-5.0}"
 SIZE_ORB="${SIZE_ORB:-7}"
 SIZE_CARRION="${SIZE_CARRION:-10}"
+SIZE_WORM="${SIZE_WORM:-12}"
 FONT_SIZE="${FONT_SIZE:-12}"
 SEED_ORB="${SEED_ORB:-7}"
 SEED_CARRION="${SEED_CARRION:-11}"
+SEED_WORM="${SEED_WORM:-23}"
 
 # dark navy terminal: background, foreground, then 16 ANSI palette entries
 THEME="060913,9fb6ff,0b1220,7f1d1d,166534,92400e,1e3a8a,6d28d9,0e7490,94a3b8,334155,ef4444,22c55e,f59e0b,3b82f6,a855f7,22d3ee,e2e8f0"
@@ -52,3 +54,4 @@ capture() {
 
 capture orb "$SEED_ORB" "$SIZE_ORB"
 capture carrion "$SEED_CARRION" "$SIZE_CARRION" --carrion
+capture worm "$SEED_WORM" "$SIZE_WORM" --worm
