@@ -40,8 +40,8 @@ Menu keys:
 
 - `Up` / `Down` — move through the mode list and parameter rows
 - `Left` / `Right` — switch between the mode list and the parameter column
-- `Enter` — start the focused mode; on the playlist row it toggles playlist
-  mode, and on a mode row while playlist mode is on it marks that mode
+- `Enter` — start (only from `[ START ]`); on the playlist row it toggles
+  playlist mode, and on a mode row while playlist mode is on it marks that mode
 - `+` / `-` — adjust the focused parameter
 - `q` or `Esc` — quit
 

@@ -169,7 +169,7 @@ CAPTURE (headless, no TTY required):
 
 MENU (bare `orbyn`):
     arrows              move through modes and parameters
-    Enter               start, toggle playlist, or mark a mode
+    Enter               start from [ START ], toggle playlist, or mark a mode
     +, -                adjust the focused parameter
     q                   quit
 

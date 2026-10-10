@@ -266,7 +266,8 @@ pub fn on_key(state: &mut MenuState, key: Key) -> Option<TableAction> {
                 return Some(TableAction::Run);
             }
             match state.focus {
-                Focus::Params | Focus::Start => Some(TableAction::Run),
+                Focus::Start => Some(TableAction::Run),
+                Focus::Params => Some(TableAction::Noop),
                 Focus::List => {
                     if state.list_index == 0 {
                         state.playlist_on = !state.playlist_on;
@@ -281,7 +282,7 @@ pub fn on_key(state: &mut MenuState, key: Key) -> Option<TableAction> {
                         }
                         Some(TableAction::Noop)
                     } else {
-                        Some(TableAction::Run)
+                        Some(TableAction::Noop)
                     }
                 }
             }
@@ -333,14 +334,23 @@ fn param_text(row: ParamRow, params: &Params) -> String {
 pub fn layout(w: usize, h: usize) -> MenuRects {
     let half_w = w / 2;
     let half_h = h / 2;
+    let quadrant_w = w - half_w;
     let quadrant_h = h - half_h;
-    let interior_w = half_w.saturating_sub(2);
+    let interior_w = quadrant_w.saturating_sub(2);
     let interior_h = quadrant_h.saturating_sub(2);
-    let preview = if interior_w >= 8 && interior_h >= 5 {
-        Some((1, half_h + 1, interior_w, interior_h))
-    } else {
-        None
-    };
+    let top_interior_h = half_h.saturating_sub(2);
+    if top_interior_h >= 7 && interior_w >= 8 && interior_h >= 5 {
+        let start = (
+            half_w.saturating_sub("[ START ]".len()) / 2,
+            half_h + 1 + (interior_h - 1) / 2,
+        );
+        return MenuRects {
+            preview: Some((half_w + 1, half_h + 1, interior_w, interior_h)),
+            modes: (1, 1),
+            params: (half_w + 1, 1),
+            start,
+        };
+    }
     let mut modes_w = "Playlist [off]".chars().count();
     for being in Being::all() {
         modes_w = modes_w.max(2 + being.name().chars().count());
@@ -351,15 +361,11 @@ pub fn layout(w: usize, h: usize) -> MenuRects {
     }
     let modes_x = w.saturating_sub(modes_w);
     let params_x = modes_x.saturating_sub(params_w);
-    let start = match preview {
-        Some((x, y, _, ih)) => (x, y + ih - 1),
-        None => (0, h.saturating_sub(1)),
-    };
     MenuRects {
-        preview,
+        preview: None,
         modes: (modes_x, 0),
         params: (params_x, 0),
-        start,
+        start: (0, h.saturating_sub(1)),
     }
 }
 
@@ -389,6 +395,30 @@ fn put_right(buf: &mut [Cell], w: usize, h: usize, end: usize, y: usize, s: &str
     }
 }
 
+fn draw_box(
+    buf: &mut [Cell],
+    w: usize,
+    h: usize,
+    (x0, y0, x1, y1): (usize, usize, usize, usize),
+    color: Color,
+) {
+    if w == 0 || h == 0 || x1 <= x0 || y1 <= y0 || x1 >= w || y1 >= h {
+        return;
+    }
+    for x in x0..=x1 {
+        buf[y0 * w + x] = Cell { ch: '─', color };
+        buf[y1 * w + x] = Cell { ch: '─', color };
+    }
+    for y in y0..=y1 {
+        buf[y * w + x0] = Cell { ch: '│', color };
+        buf[y * w + x1] = Cell { ch: '│', color };
+    }
+    buf[y0 * w + x0] = Cell { ch: '╭', color };
+    buf[y0 * w + x1] = Cell { ch: '╮', color };
+    buf[y1 * w + x0] = Cell { ch: '╰', color };
+    buf[y1 * w + x1] = Cell { ch: '╯', color };
+}
+
 pub fn frame(
     state: &MenuState,
     preview: Option<&PreviewFrame>,
@@ -401,51 +431,44 @@ pub fn frame(
         return buf;
     }
     let rects = layout(w, h);
-    let half_w = w / 2;
-    let half_h = h / 2;
     let accent = menu_color(mode, true);
+
+    let playlist_text = if state.playlist_on {
+        "Playlist [on]"
+    } else {
+        "Playlist [off]"
+    };
+    let playlist_color = if state.focus == Focus::List && state.list_index == 0 {
+        accent
+    } else {
+        Color::Default
+    };
+
     if let Some((ix, iy, iw, ih)) = rects.preview {
+        let half_w = w / 2;
+        let half_h = h / 2;
         let border = if mode == ColorMode::Mono {
             Color::Default
         } else {
             Color::Rgb(255, 255, 255)
         };
-        for x in 0..half_w {
-            buf[half_h * w + x] = Cell {
-                ch: '─',
-                color: border,
-            };
-            buf[(h - 1) * w + x] = Cell {
-                ch: '─',
-                color: border,
-            };
-        }
-        for y in half_h..h {
-            buf[y * w] = Cell {
-                ch: '│',
-                color: border,
-            };
-            buf[y * w + half_w - 1] = Cell {
-                ch: '│',
+        draw_box(&mut buf, w, h, (0, 0, half_w - 1, half_h - 1), border);
+        draw_box(&mut buf, w, h, (half_w, 0, w - 1, half_h - 1), border);
+        draw_box(&mut buf, w, h, (0, half_h, half_w - 1, h - 1), border);
+        draw_box(&mut buf, w, h, (half_w, half_h, w - 1, h - 1), border);
+
+        put(&mut buf, w, h, 3, 0, "ORBYN", accent);
+        buf[2] = Cell {
+            ch: ' ',
+            color: border,
+        };
+        if half_w > 9 {
+            buf[8] = Cell {
+                ch: ' ',
                 color: border,
             };
         }
-        buf[half_h * w] = Cell {
-            ch: '╭',
-            color: border,
-        };
-        buf[half_h * w + half_w - 1] = Cell {
-            ch: '╮',
-            color: border,
-        };
-        buf[(h - 1) * w] = Cell {
-            ch: '╰',
-            color: border,
-        };
-        buf[(h - 1) * w + half_w - 1] = Cell {
-            ch: '╯',
-            color: border,
-        };
+
         if let Some(pv) = preview {
             for row in 0..pv.size.1 {
                 for col in 0..pv.size.0 {
@@ -461,47 +484,84 @@ pub fn frame(
                 }
             }
         }
+
+        put(
+            &mut buf,
+            w,
+            h,
+            rects.modes.0,
+            rects.modes.1,
+            playlist_text,
+            playlist_color,
+        );
+        for (i, being) in Being::all().iter().enumerate() {
+            let mark = if state.marked[i] { '▪' } else { '○' };
+            let text = format!("{mark} {}", being.name());
+            let color = if state.focus == Focus::List && state.list_index == i + 1 {
+                accent
+            } else {
+                Color::Default
+            };
+            put(
+                &mut buf,
+                w,
+                h,
+                rects.modes.0,
+                rects.modes.1 + i + 1,
+                &text,
+                color,
+            );
+        }
+        for (i, row) in param_rows(state.playlist_on).iter().enumerate() {
+            let text = param_text(*row, &state.params);
+            let color = if state.focus == Focus::Params && state.param_index == i {
+                accent
+            } else {
+                Color::Default
+            };
+            put(
+                &mut buf,
+                w,
+                h,
+                rects.params.0,
+                rects.params.1 + i,
+                &text,
+                color,
+            );
+        }
+    } else {
+        put(&mut buf, w, h, 0, 0, "ORBYN", accent);
+        put_right(&mut buf, w, h, w, 0, playlist_text, playlist_color);
+        for (i, being) in Being::all().iter().enumerate() {
+            let row = i + 1;
+            let mark = if state.marked[i] { '▪' } else { '○' };
+            let text = format!("{mark} {}", being.name());
+            let color = if state.focus == Focus::List && state.list_index == row {
+                accent
+            } else {
+                Color::Default
+            };
+            put_right(&mut buf, w, h, w, row, &text, color);
+        }
+        let params_end = rects.modes.0;
+        for (i, row) in param_rows(state.playlist_on).iter().enumerate() {
+            let text = param_text(*row, &state.params);
+            let color = if state.focus == Focus::Params && state.param_index == i {
+                accent
+            } else {
+                Color::Default
+            };
+            put_right(&mut buf, w, h, params_end, i, &text, color);
+        }
     }
 
-    put(&mut buf, w, h, 0, 0, "ORBYN", accent);
-
-    let playlist_text = if state.playlist_on {
-        "Playlist [on]"
-    } else {
-        "Playlist [off]"
-    };
-    let playlist_color = if state.focus == Focus::List && state.list_index == 0 {
+    let (sx, sy) = rects.start;
+    let start_color = if state.focus == Focus::Start {
         accent
     } else {
         Color::Default
     };
-    put_right(&mut buf, w, h, w, 0, playlist_text, playlist_color);
-
-    for (i, being) in Being::all().iter().enumerate() {
-        let row = i + 1;
-        let mark = if state.marked[i] { '▪' } else { '○' };
-        let text = format!("{mark} {}", being.name());
-        let color = if state.focus == Focus::List && state.list_index == row {
-            accent
-        } else {
-            Color::Default
-        };
-        put_right(&mut buf, w, h, w, row, &text, color);
-    }
-
-    let params_end = rects.modes.0;
-    for (i, row) in param_rows(state.playlist_on).iter().enumerate() {
-        let text = param_text(*row, &state.params);
-        let color = if state.focus == Focus::Params && state.param_index == i {
-            accent
-        } else {
-            Color::Default
-        };
-        put_right(&mut buf, w, h, params_end, i, &text, color);
-    }
-
-    let (sx, sy) = rects.start;
-    put(&mut buf, w, h, sx, sy, "[ START ]", accent);
+    put(&mut buf, w, h, sx, sy, "[ START ]", start_color);
 
     buf
 }
@@ -1037,10 +1097,11 @@ mod tests {
     }
 
     #[test]
-    fn enter_on_being_row_runs_without_playlist() {
+    fn enter_on_being_row_without_playlist_is_noop() {
         let mut state = MenuState::default();
         on_key(&mut state, Key::Down);
-        assert_eq!(on_key(&mut state, Key::Enter), Some(TableAction::Run));
+        assert_eq!(on_key(&mut state, Key::Enter), Some(TableAction::Noop));
+        assert_eq!(state.focus, Focus::List);
     }
 
     #[test]
@@ -1056,9 +1117,10 @@ mod tests {
     }
 
     #[test]
-    fn enter_on_params_runs() {
+    fn enter_on_params_is_noop() {
         let mut state = in_params();
-        assert_eq!(on_key(&mut state, Key::Enter), Some(TableAction::Run));
+        assert_eq!(on_key(&mut state, Key::Enter), Some(TableAction::Noop));
+        assert_eq!(state.focus, Focus::Params);
     }
 
     #[test]
@@ -1543,44 +1605,64 @@ mod render_tests {
     #[test]
     fn layout_80x24_pins_rects() {
         let rects = layout(W, H);
-        assert_eq!(rects.preview, Some((1, 13, 38, 10)));
-        assert_eq!(rects.modes, (66, 0));
-        assert_eq!(rects.params, (54, 0));
-        assert_eq!(rects.start, (1, 22));
+        assert_eq!(rects.preview, Some((41, 13, 38, 10)));
+        assert_eq!(rects.modes, (1, 1));
+        assert_eq!(rects.params, (41, 1));
+        assert_eq!(rects.start, (15, 17));
     }
 
     #[test]
-    fn layout_thresholds_match_brief() {
-        assert_eq!(layout(20, 24).preview, Some((1, 13, 8, 10)));
-        assert_eq!(layout(19, 24).preview, None);
-        assert_eq!(layout(40, 14).preview, Some((1, 8, 18, 5)));
-        assert_eq!(layout(40, 13).preview, Some((1, 7, 18, 5)));
+    fn layout_thresholds_follow_preview_interior() {
+        assert_eq!(layout(20, 24).preview, Some((11, 13, 8, 10)));
+        assert_eq!(layout(19, 24).preview, Some((10, 13, 8, 10)));
+        assert_eq!(layout(18, 24).preview, None);
+        assert_eq!(layout(40, 18).preview, Some((21, 10, 18, 7)));
+        assert_eq!(layout(40, 17).preview, None);
+        assert_eq!(layout(40, 14).preview, None);
+        assert_eq!(layout(40, 13).preview, None);
         assert_eq!(layout(40, 12).preview, None);
         assert_eq!(layout(16, 6).preview, None);
     }
 
     #[test]
-    fn preview_border_is_white_on_all_four_edges() {
+    fn all_four_boxes_are_bordered_in_white() {
         let cells = frame(&blank(), None, W, H, ColorMode::TrueColor);
         let white = Color::Rgb(255, 255, 255);
-        for x in 0..40 {
-            assert_eq!(at(&cells, W, x, 12).color, white);
-            assert_eq!(at(&cells, W, x, 23).color, white);
+        for x in 0..W {
+            for y in [11, 12, 23] {
+                assert_eq!(at(&cells, W, x, y).color, white, "({x},{y})");
+            }
         }
-        for y in 12..24 {
-            assert_eq!(at(&cells, W, 0, y).color, white);
-            assert_eq!(at(&cells, W, 39, y).color, white);
+        for x in (0..3).chain(8..W) {
+            assert_eq!(at(&cells, W, x, 0).color, white, "({x},0)");
         }
+        for y in 0..H {
+            for x in [0, 39, 40, 79] {
+                assert_eq!(at(&cells, W, x, y).color, white, "({x},{y})");
+            }
+        }
+        assert_eq!(at(&cells, W, 0, 0).ch, '╭');
+        assert_eq!(at(&cells, W, 39, 0).ch, '╮');
+        assert_eq!(at(&cells, W, 40, 0).ch, '╭');
+        assert_eq!(at(&cells, W, 79, 0).ch, '╮');
+        assert_eq!(at(&cells, W, 0, 11).ch, '╰');
+        assert_eq!(at(&cells, W, 39, 11).ch, '╯');
+        assert_eq!(at(&cells, W, 40, 11).ch, '╰');
+        assert_eq!(at(&cells, W, 79, 11).ch, '╯');
         assert_eq!(at(&cells, W, 0, 12).ch, '╭');
         assert_eq!(at(&cells, W, 39, 12).ch, '╮');
+        assert_eq!(at(&cells, W, 40, 12).ch, '╭');
+        assert_eq!(at(&cells, W, 79, 12).ch, '╮');
         assert_eq!(at(&cells, W, 0, 23).ch, '╰');
         assert_eq!(at(&cells, W, 39, 23).ch, '╯');
+        assert_eq!(at(&cells, W, 40, 23).ch, '╰');
+        assert_eq!(at(&cells, W, 79, 23).ch, '╯');
     }
 
     #[test]
     fn preview_cells_are_blitted_into_the_interior() {
         let pv = PreviewFrame {
-            origin: (1, 13),
+            origin: (41, 13),
             size: (3, 2),
             cells: (0..6)
                 .map(|i| Cell {
@@ -1590,19 +1672,20 @@ mod render_tests {
                 .collect(),
         };
         let cells = frame(&blank(), Some(&pv), W, H, ColorMode::TrueColor);
-        assert_eq!(at(&cells, W, 1, 13).ch, 'a');
-        assert_eq!(at(&cells, W, 3, 13).ch, 'c');
-        assert_eq!(at(&cells, W, 1, 14).ch, 'd');
-        assert_eq!(at(&cells, W, 3, 14).ch, 'f');
-        assert_eq!(at(&cells, W, 1, 13).color, Color::Basic(1));
-        assert_eq!(at(&cells, W, 4, 13), Cell::BLANK);
-        assert_eq!(at(&cells, W, 1, 15), Cell::BLANK);
+        assert_eq!(at(&cells, W, 41, 13).ch, 'a');
+        assert_eq!(at(&cells, W, 43, 13).ch, 'c');
+        assert_eq!(at(&cells, W, 41, 14).ch, 'd');
+        assert_eq!(at(&cells, W, 43, 14).ch, 'f');
+        assert_eq!(at(&cells, W, 41, 13).color, Color::Basic(1));
+        assert_eq!(at(&cells, W, 44, 13), Cell::BLANK);
+        assert_eq!(at(&cells, W, 41, 15), Cell::BLANK);
+        assert_eq!(at(&cells, W, 40, 13).ch, '│');
     }
 
     #[test]
     fn preview_cells_are_clipped_to_the_interior() {
         let pv = PreviewFrame {
-            origin: (0, 12),
+            origin: (40, 12),
             size: (50, 20),
             cells: vec![
                 Cell {
@@ -1613,20 +1696,46 @@ mod render_tests {
             ],
         };
         let cells = frame(&blank(), Some(&pv), W, H, ColorMode::TrueColor);
-        assert_eq!(at(&cells, W, 0, 12).ch, '╭');
-        assert_eq!(at(&cells, W, 0, 12).color, Color::Rgb(255, 255, 255));
-        assert_eq!(at(&cells, W, 1, 13).ch, '#');
-        assert_eq!(at(&cells, W, 38, 22).ch, '#');
-        assert_eq!(at(&cells, W, 40, 12), Cell::BLANK);
+        assert_eq!(at(&cells, W, 40, 12).ch, '╭');
+        assert_eq!(at(&cells, W, 40, 12).color, Color::Rgb(255, 255, 255));
+        assert_eq!(at(&cells, W, 41, 12).ch, '─');
+        assert_eq!(at(&cells, W, 41, 13).ch, '#');
+        assert_eq!(at(&cells, W, 78, 22).ch, '#');
+        assert_eq!(at(&cells, W, 41, 23).ch, '─');
+        assert_eq!(at(&cells, W, 79, 23).ch, '╯');
+        assert_eq!(at(&cells, W, 40, 20).ch, '│');
     }
 
     #[test]
-    fn start_button_sits_inside_the_frame() {
+    fn start_button_is_centered_in_bottom_left_box() {
         let cells = frame(&blank(), None, W, H, ColorMode::TrueColor);
         for (i, ch) in "[ START ]".chars().enumerate() {
-            let cell = at(&cells, W, 1 + i, 22);
+            let cell = at(&cells, W, 15 + i, 17);
             assert_eq!(cell.ch, ch, "offset {i}");
-            assert_eq!(cell.color, accent());
+        }
+        assert_eq!(at(&cells, W, 14, 17), Cell::BLANK);
+        assert_eq!(at(&cells, W, 24, 17), Cell::BLANK);
+    }
+
+    #[test]
+    fn start_button_highlights_only_when_focused() {
+        let unfocused = frame(&blank(), None, W, H, ColorMode::TrueColor);
+        for i in 0.."[ START ]".len() {
+            assert_eq!(
+                at(&unfocused, W, 15 + i, 17).color,
+                Color::Default,
+                "offset {i}"
+            );
+        }
+
+        let mut state = blank();
+        for _ in 0..3 {
+            on_key(&mut state, Key::Down);
+        }
+        assert!(state.at_start);
+        let focused = frame(&state, None, W, H, ColorMode::TrueColor);
+        for i in 0.."[ START ]".len() {
+            assert_eq!(at(&focused, W, 15 + i, 17).color, accent(), "offset {i}");
         }
     }
 
@@ -1639,11 +1748,11 @@ mod render_tests {
     }
 
     #[test]
-    fn modes_rows_are_right_aligned() {
+    fn modes_rows_are_left_aligned_in_top_left_box() {
         let cells = frame(&blank(), None, W, H, ColorMode::TrueColor);
-        assert_eq!(row_text(&cells, W, 0, 66, 80), "Playlist [off]");
-        assert_eq!(row_text(&cells, W, 1, 75, 80), "○ orb");
-        assert_eq!(row_text(&cells, W, 2, 71, 80), "○ carrion");
+        assert_eq!(row_text(&cells, W, 1, 1, 15), "Playlist [off]");
+        assert_eq!(row_text(&cells, W, 2, 1, 6), "○ orb");
+        assert_eq!(row_text(&cells, W, 3, 1, 10), "○ carrion");
     }
 
     #[test]
@@ -1653,7 +1762,7 @@ mod render_tests {
             ..blank()
         };
         let cells = frame(&state, None, W, H, ColorMode::TrueColor);
-        assert_eq!(row_text(&cells, W, 0, 67, 80), "Playlist [on]");
+        assert_eq!(row_text(&cells, W, 1, 1, 14), "Playlist [on]");
     }
 
     #[test]
@@ -1663,27 +1772,27 @@ mod render_tests {
             ..blank()
         };
         let cells = frame(&state, None, W, H, ColorMode::TrueColor);
-        assert_eq!(at(&cells, W, 75, 1).ch, '▪');
-        assert_eq!(at(&cells, W, 71, 2).ch, '○');
+        assert_eq!(at(&cells, W, 1, 2).ch, '▪');
+        assert_eq!(at(&cells, W, 1, 3).ch, '○');
 
         let flipped = MenuState {
             marked: [false, true],
             ..blank()
         };
         let cells = frame(&flipped, None, W, H, ColorMode::TrueColor);
-        assert_eq!(at(&cells, W, 75, 1).ch, '○');
-        assert_eq!(at(&cells, W, 71, 2).ch, '▪');
+        assert_eq!(at(&cells, W, 1, 2).ch, '○');
+        assert_eq!(at(&cells, W, 1, 3).ch, '▪');
     }
 
     #[test]
-    fn params_column_sits_left_of_modes() {
+    fn params_column_sits_at_left_of_top_right_box() {
         let cells = frame(&blank(), None, W, H, ColorMode::TrueColor);
-        assert_eq!(row_text(&cells, W, 0, 57, 66), "speed 1.0");
-        assert_eq!(row_text(&cells, W, 1, 56, 66), "trail 0.82");
-        assert_eq!(row_text(&cells, W, 2, 57, 66), "size auto");
-        assert_eq!(row_text(&cells, W, 3, 56, 66), "color auto");
-        assert_eq!(row_text(&cells, W, 4, 60, 66), "fps 30");
-        assert_eq!(row_text(&cells, W, 5, 61, 66), "hud 6");
+        assert_eq!(row_text(&cells, W, 1, 41, 50), "speed 1.0");
+        assert_eq!(row_text(&cells, W, 2, 41, 51), "trail 0.82");
+        assert_eq!(row_text(&cells, W, 3, 41, 50), "size auto");
+        assert_eq!(row_text(&cells, W, 4, 41, 51), "color auto");
+        assert_eq!(row_text(&cells, W, 5, 41, 47), "fps 30");
+        assert_eq!(row_text(&cells, W, 6, 41, 46), "hud 6");
     }
 
     #[test]
@@ -1702,20 +1811,20 @@ mod render_tests {
             ..blank()
         };
         let cells = frame(&state, None, W, H, ColorMode::TrueColor);
-        assert_eq!(row_text(&cells, W, 0, 57, 66), "speed 2.5");
-        assert_eq!(row_text(&cells, W, 1, 56, 66), "trail 0.50");
-        assert_eq!(row_text(&cells, W, 2, 59, 66), "size 12");
-        assert_eq!(row_text(&cells, W, 3, 57, 66), "color 256");
-        assert_eq!(row_text(&cells, W, 4, 60, 66), "fps 60");
-        assert_eq!(row_text(&cells, W, 5, 61, 66), "hud 3");
-        assert_eq!(row_text(&cells, W, 6, 55, 66), "interval 45");
+        assert_eq!(row_text(&cells, W, 1, 41, 50), "speed 2.5");
+        assert_eq!(row_text(&cells, W, 2, 41, 51), "trail 0.50");
+        assert_eq!(row_text(&cells, W, 3, 41, 48), "size 12");
+        assert_eq!(row_text(&cells, W, 4, 41, 50), "color 256");
+        assert_eq!(row_text(&cells, W, 5, 41, 47), "fps 60");
+        assert_eq!(row_text(&cells, W, 6, 41, 46), "hud 3");
+        assert_eq!(row_text(&cells, W, 7, 41, 52), "interval 45");
     }
 
     #[test]
     fn interval_row_only_when_playlist_on() {
         let off = frame(&blank(), None, W, H, ColorMode::TrueColor);
-        for x in 54..66 {
-            assert_eq!(at(&off, W, x, 6), Cell::BLANK);
+        for x in 41..58 {
+            assert_eq!(at(&off, W, x, 7), Cell::BLANK);
         }
         let on = frame(
             &MenuState {
@@ -1727,16 +1836,20 @@ mod render_tests {
             H,
             ColorMode::TrueColor,
         );
-        assert_eq!(row_text(&on, W, 6, 54, 66), "interval 300");
+        assert_eq!(row_text(&on, W, 7, 41, 53), "interval 300");
     }
 
     #[test]
-    fn wordmark_sits_top_left_in_accent() {
+    fn wordmark_is_accent_title_on_top_left_border() {
         let cells = frame(&blank(), None, W, H, ColorMode::TrueColor);
-        assert_eq!(row_text(&cells, W, 0, 0, 5), "ORBYN");
-        for x in 0..5 {
+        assert_eq!(row_text(&cells, W, 0, 0, 9), "╭─ ORBYN ");
+        for x in 3..8 {
             assert_eq!(at(&cells, W, x, 0).color, accent());
         }
+        assert_eq!(at(&cells, W, 2, 0).ch, ' ');
+        assert_eq!(at(&cells, W, 8, 0).ch, ' ');
+        assert_eq!(at(&cells, W, 9, 0).ch, '─');
+        assert_eq!(at(&cells, W, 2, 0).color, Color::Rgb(255, 255, 255));
     }
 
     #[test]
@@ -1746,17 +1859,19 @@ mod render_tests {
             .iter()
             .all(|cell| !matches!(cell.color, Color::Rgb(..))));
         assert_eq!(at(&mono, W, 0, 0).color, Color::Default);
-        assert_eq!(at(&mono, W, 0, 12).color, Color::Default);
+        assert_eq!(at(&mono, W, 3, 0).color, Color::Default);
+        assert_eq!(at(&mono, W, 40, 12).color, Color::Default);
 
         let truecolor = frame(&blank(), None, W, H, ColorMode::TrueColor);
         assert!(truecolor
             .iter()
             .any(|cell| matches!(cell.color, Color::Rgb(..))));
-        assert_eq!(at(&truecolor, W, 0, 0).color, accent());
+        assert_eq!(at(&truecolor, W, 3, 0).color, accent());
+        assert_eq!(at(&truecolor, W, 0, 0).color, Color::Rgb(255, 255, 255));
 
         let ansi256 = frame(&blank(), None, W, H, ColorMode::Ansi256);
         assert_eq!(
-            at(&ansi256, W, 0, 0).color,
+            at(&ansi256, W, 3, 0).color,
             menu_color(ColorMode::Ansi256, true)
         );
     }
@@ -1766,8 +1881,8 @@ mod render_tests {
         let mut state = blank();
         state.list_index = 1;
         let cells = frame(&state, None, W, H, ColorMode::TrueColor);
-        assert_eq!(at(&cells, W, 75, 1).color, accent());
-        assert_eq!(at(&cells, W, 66, 0).color, Color::Default);
+        assert_eq!(at(&cells, W, 1, 2).color, accent());
+        assert_eq!(at(&cells, W, 1, 1).color, Color::Default);
 
         let params = MenuState {
             focus: Focus::Params,
@@ -1775,8 +1890,8 @@ mod render_tests {
             ..blank()
         };
         let cells = frame(&params, None, W, H, ColorMode::TrueColor);
-        assert_eq!(at(&cells, W, 57, 0).color, accent());
-        assert_eq!(at(&cells, W, 75, 1).color, Color::Default);
+        assert_eq!(at(&cells, W, 41, 1).color, accent());
+        assert_eq!(at(&cells, W, 1, 2).color, Color::Default);
     }
 
     #[test]
@@ -1790,7 +1905,7 @@ mod render_tests {
     #[test]
     fn frame_is_deterministic() {
         let pv = PreviewFrame {
-            origin: (1, 13),
+            origin: (41, 13),
             size: (4, 4),
             cells: vec![
                 Cell {
