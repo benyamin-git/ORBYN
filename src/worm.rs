@@ -8,11 +8,13 @@ use crate::ASPECT;
 const SPINE_N: usize = 24;
 const LENGTH_RATIO: f32 = 10.0;
 const FRINGE_MARGIN: f32 = 1.0;
-const NODE_K: f32 = 9.0;
-const CHAIN_CURL: f32 = 0.18;
-const WAVE_AMP: f32 = 0.22;
-const WAVE_SPEED: f32 = 1.4;
-const WAVE_K: f32 = 0.55;
+const TRAIL_CAP: usize = 512;
+const TRAIL_STEP: f32 = 0.2;
+const WEAVE_AMP: f32 = 0.30;
+const WEAVE_LEN: f32 = 1.25;
+const WANDER_AMP: f32 = 1.4;
+const WANDER_LEN: f32 = 3.0;
+const TURN_RATE: f32 = 0.15;
 const SPAN_RATIO: f32 = 6.6;
 const BREATHE_RATE: f32 = 1.7;
 const TONE_SCALE: (f32, f32) = (0.32, 0.20);
@@ -34,10 +36,11 @@ type Rect = (usize, usize, usize, usize);
 
 pub struct Worm {
     grid: Grid,
-    rng: Rng,
     heading: f32,
-    turn: f32,
-    wander: f32,
+    course: f32,
+    weave_phase: f32,
+    wander_phase: f32,
+    dist: f64,
     base_t: f32,
     auto_size: bool,
     speed: f32,
@@ -45,6 +48,11 @@ pub struct Worm {
     paused: bool,
     time: f32,
     noise_time: f64,
+    trail_x: [f32; TRAIL_CAP],
+    trail_y: [f32; TRAIL_CAP],
+    trail_seg: [f32; TRAIL_CAP],
+    trail_len: usize,
+    trail_head: usize,
     nodes_x: [f32; SPINE_N],
     nodes_y: [f32; SPINE_N],
     dirty: Option<(i32, i32, i32, i32)>,
@@ -55,15 +63,16 @@ impl Worm {
         let mut rng = Rng::new(cfg.seed.unwrap_or_else(Rng::seed_from_time));
         let auto_size = cfg.size.is_none();
         let base_t = fit_thickness(cfg.size.unwrap_or_else(|| auto_thickness(h)), w, h);
-        let heading = rng.range(0.0, TAU);
-        let turn = rng.range(-0.4, 0.4);
-        let wander = rng.range(1.5, 4.0);
+        let course = rng.range(0.0, TAU);
+        let weave_phase = rng.range(0.0, TAU);
+        let wander_phase = rng.range(0.0, 64.0);
         let mut worm = Self {
             grid: Grid::new(w, h),
-            rng,
-            heading,
-            turn,
-            wander,
+            heading: course,
+            course,
+            weave_phase,
+            wander_phase,
+            dist: 0.0,
             base_t,
             auto_size,
             speed: cfg.speed,
@@ -71,12 +80,18 @@ impl Worm {
             paused: false,
             time: 0.0,
             noise_time: 0.0,
+            trail_x: [0.0; TRAIL_CAP],
+            trail_y: [0.0; TRAIL_CAP],
+            trail_seg: [0.0; TRAIL_CAP],
+            trail_len: 0,
+            trail_head: 0,
             nodes_x: [0.0; SPINE_N],
             nodes_y: [0.0; SPINE_N],
             dirty: None,
         };
         worm.nodes_x[0] = w as f32 * 0.5;
         worm.nodes_y[0] = h as f32 * 0.5;
+        worm.heading = worm.desired_heading();
         worm.snap();
         worm
     }
@@ -84,20 +99,17 @@ impl Worm {
     pub fn update(&mut self, dt: f32, w: usize, h: usize) {
         self.time = (self.time + dt) % TAU;
         self.noise_time += dt as f64;
-        self.wander -= dt;
-        if self.wander <= 0.0 {
-            self.wander = self.rng.range(1.5, 4.0);
-            self.turn = self.rng.range(-0.7, 0.7);
-        }
-        self.heading = wrap_angle(self.heading + self.turn * dt);
         let base = base_speed(h, self.speed);
+        self.dist += (base * dt) as f64;
+        self.advance_heading(dt);
         let wf = w.max(1) as f32;
         let hf = h.max(1) as f32;
         let head_x = self.nodes_x[0] + self.heading.cos() * base * ASPECT * dt;
         let head_y = self.nodes_y[0] + self.heading.sin() * base * dt;
         self.nodes_x[0] = head_x.rem_euclid(wf);
         self.nodes_y[0] = head_y.rem_euclid(hf);
-        self.update_nodes(dt, w, h);
+        self.record_trail(w, h);
+        self.place_nodes(w, h);
         self.render(w, h);
     }
 
@@ -109,6 +121,10 @@ impl Worm {
         self.base_t = fit_thickness(self.base_t, w, h);
         let wf = w.max(1) as f32;
         let hf = h.max(1) as f32;
+        for i in 0..TRAIL_CAP {
+            self.trail_x[i] = self.trail_x[i].rem_euclid(wf);
+            self.trail_y[i] = self.trail_y[i].rem_euclid(hf);
+        }
         for i in 0..SPINE_N {
             self.nodes_x[i] = self.nodes_x[i].rem_euclid(wf);
             self.nodes_y[i] = self.nodes_y[i].rem_euclid(hf);
@@ -148,44 +164,139 @@ impl Worm {
         &self.grid
     }
 
-    fn update_nodes(&mut self, dt: f32, w: usize, h: usize) {
+    fn desired_heading(&self) -> f32 {
+        let body_len = LENGTH_RATIO * self.base_t;
+        let dist = self.dist as f32;
+        let wander_q = dist / (WANDER_LEN * body_len) + self.wander_phase;
+        let wander = WANDER_AMP * (2.0 * noise2(wander_q, 11.7) - 1.0);
+        let weave_q = TAU * dist / (WEAVE_LEN * body_len) + self.weave_phase;
+        let weave = WEAVE_AMP * weave_q.sin();
+        wrap_angle(self.course + wander + weave)
+    }
+
+    fn advance_heading(&mut self, dt: f32) {
+        let delta = wrap_delta(self.desired_heading() - self.heading, TAU);
+        let step = delta.clamp(-TURN_RATE * dt, TURN_RATE * dt);
+        self.heading = wrap_angle(self.heading + step);
+    }
+
+    fn push_trail(&mut self, x: f32, y: f32, seg: f32) {
+        self.trail_head = (self.trail_head + 1) % TRAIL_CAP;
+        self.trail_x[self.trail_head] = x;
+        self.trail_y[self.trail_head] = y;
+        self.trail_seg[self.trail_head] = seg;
+        self.trail_len = (self.trail_len + 1).min(TRAIL_CAP);
+    }
+
+    fn record_trail(&mut self, w: usize, h: usize) {
         let wf = w.max(1) as f32;
         let hf = h.max(1) as f32;
+        let step = TRAIL_STEP * self.base_t;
+        let head_x = self.nodes_x[0];
+        let head_y = self.nodes_y[0];
+        if self.trail_len == 0 {
+            self.push_trail(head_x, head_y, 0.0);
+            return;
+        }
+        let last_x = self.trail_x[self.trail_head];
+        let last_y = self.trail_y[self.trail_head];
+        let dx = wrap_delta(head_x - last_x, wf);
+        let dy = wrap_delta(head_y - last_y, hf);
+        let ax = dx / ASPECT;
+        let total = (ax * ax + dy * dy).sqrt();
+        if total < step {
+            return;
+        }
+        let mut walked = 0.0f32;
+        while total - walked >= step {
+            walked += step;
+            let t = walked / total;
+            let x = (last_x + dx * t).rem_euclid(wf);
+            let y = (last_y + dy * t).rem_euclid(hf);
+            self.push_trail(x, y, step);
+        }
+    }
+
+    fn place_nodes(&mut self, w: usize, h: usize) {
+        let wf = w.max(1) as f32;
+        let hf = h.max(1) as f32;
+        let head_x = self.nodes_x[0].rem_euclid(wf);
+        let head_y = self.nodes_y[0].rem_euclid(hf);
+        self.nodes_x[0] = head_x;
+        self.nodes_y[0] = head_y;
         let spacing = LENGTH_RATIO * self.base_t / SPINE_N as f32;
-        let k = (NODE_K * dt).min(1.0);
+        let mut dir_x = -self.heading.cos();
+        let mut dir_y = -self.heading.sin();
+        let mut sx = head_x;
+        let mut sy = head_y;
+        let mut arc = 0.0f32;
+        let mut samples_left = self.trail_len;
+        let mut idx = self.trail_head;
+        let mut seg_dx = 0.0f32;
+        let mut seg_dy = 0.0f32;
+        let mut seg = 0.0f32;
+        if samples_left > 0 {
+            seg_dx = wrap_delta(self.trail_x[idx] - sx, wf);
+            seg_dy = wrap_delta(self.trail_y[idx] - sy, hf);
+            let ax = seg_dx / ASPECT;
+            seg = (ax * ax + seg_dy * seg_dy).sqrt();
+        }
         for i in 1..SPINE_N {
-            let px = self.nodes_x[i - 1];
-            let py = self.nodes_y[i - 1];
-            let cx = self.nodes_x[i];
-            let cy = self.nodes_y[i];
-            let dx = wrap_delta(cx - px, wf);
-            let dy = wrap_delta(cy - py, hf);
-            let base_angle = if dx * dx + dy * dy > 1e-6 {
-                dy.atan2(dx / ASPECT)
-            } else {
-                self.heading + PI
-            };
-            let travel = (self.time * WAVE_SPEED - i as f32 * WAVE_K).sin();
-            let angle = base_angle + CHAIN_CURL + WAVE_AMP * travel;
-            let tx = px + angle.cos() * spacing * ASPECT;
-            let ty = py + angle.sin() * spacing;
-            let mx = wrap_delta(tx - cx, wf) * k;
-            let my = wrap_delta(ty - cy, hf) * k;
-            self.nodes_x[i] = (cx + mx).rem_euclid(wf);
-            self.nodes_y[i] = (cy + my).rem_euclid(hf);
+            let target = spacing * i as f32;
+            loop {
+                if samples_left > 0 && arc + seg >= target {
+                    let t = if seg > 1e-6 {
+                        (target - arc) / seg
+                    } else {
+                        1.0
+                    };
+                    self.nodes_x[i] = (sx + seg_dx * t).rem_euclid(wf);
+                    self.nodes_y[i] = (sy + seg_dy * t).rem_euclid(hf);
+                    break;
+                }
+                if samples_left == 0 {
+                    let back = target - arc;
+                    self.nodes_x[i] = (sx + dir_x * ASPECT * back).rem_euclid(wf);
+                    self.nodes_y[i] = (sy + dir_y * back).rem_euclid(hf);
+                    break;
+                }
+                arc += seg;
+                sx = (sx + seg_dx).rem_euclid(wf);
+                sy = (sy + seg_dy).rem_euclid(hf);
+                if seg > 1e-6 {
+                    dir_x = (seg_dx / ASPECT) / seg;
+                    dir_y = seg_dy / seg;
+                }
+                let newer = idx;
+                samples_left -= 1;
+                idx = (idx + TRAIL_CAP - 1) % TRAIL_CAP;
+                seg_dx = wrap_delta(self.trail_x[idx] - sx, wf);
+                seg_dy = wrap_delta(self.trail_y[idx] - sy, hf);
+                seg = self.trail_seg[newer];
+            }
         }
     }
 
     fn snap(&mut self) {
         let wf = self.grid.w.max(1) as f32;
         let hf = self.grid.h.max(1) as f32;
-        let spacing = LENGTH_RATIO * self.base_t / SPINE_N as f32;
-        let dx = -self.heading.cos() * spacing * ASPECT;
-        let dy = -self.heading.sin() * spacing;
-        for i in 0..SPINE_N {
-            self.nodes_x[i] = (self.nodes_x[0] + dx * i as f32).rem_euclid(wf);
-            self.nodes_y[i] = (self.nodes_y[0] + dy * i as f32).rem_euclid(hf);
+        let step = TRAIL_STEP * self.base_t;
+        let needed = (LENGTH_RATIO / TRAIL_STEP).ceil() as usize + 2;
+        let head_x = self.nodes_x[0].rem_euclid(wf);
+        let head_y = self.nodes_y[0].rem_euclid(hf);
+        self.nodes_x[0] = head_x;
+        self.nodes_y[0] = head_y;
+        self.trail_len = 0;
+        self.trail_head = 0;
+        let dx = -self.heading.cos() * step * ASPECT;
+        let dy = -self.heading.sin() * step;
+        for k in (0..=needed).rev() {
+            let x = (head_x + dx * k as f32).rem_euclid(wf);
+            let y = (head_y + dy * k as f32).rem_euclid(hf);
+            let seg = if k == needed { 0.0 } else { step };
+            self.push_trail(x, y, seg);
         }
+        self.place_nodes(self.grid.w, self.grid.h);
     }
 
     fn render(&mut self, w: usize, h: usize) {
@@ -537,7 +648,185 @@ mod tests {
                 *p = (worm.nodes_x[i], worm.nodes_y[i]);
             }
         }
-        assert!(max_step < 3.0, "max node step {max_step}");
+        assert!(max_step < 2.0, "max node step {max_step}");
+    }
+
+    #[test]
+    fn body_nodes_lie_on_head_path() {
+        let (w, h) = (100, 30);
+        let mut worm = Worm::new(&config(7), w, h);
+        let dt = 1.0 / 30.0;
+        let wf = w as f32;
+        let hf = h as f32;
+        let mut hx = worm.nodes_x[0];
+        let mut hy = worm.nodes_y[0];
+        let mut hist: Vec<(f32, f32, f64)> = vec![(hx, hy, 0.0)];
+        for frame in 0..1800 {
+            worm.update(dt, w, h);
+            hx += wrap_delta(worm.nodes_x[0] - hx.rem_euclid(wf), wf);
+            hy += wrap_delta(worm.nodes_y[0] - hy.rem_euclid(hf), hf);
+            hist.push((hx, hy, worm.dist));
+            if frame < 900 {
+                continue;
+            }
+            let spacing = LENGTH_RATIO * worm.base_t / SPINE_N as f32;
+            for i in 1..SPINE_N {
+                let target = worm.dist - (spacing * i as f32) as f64;
+                let pos = hist.partition_point(|e| e.2 < target);
+                let (ex, ey) = if pos == 0 {
+                    (hist[0].0, hist[0].1)
+                } else if pos >= hist.len() {
+                    let e = hist[hist.len() - 1];
+                    (e.0, e.1)
+                } else {
+                    let a = hist[pos - 1];
+                    let b = hist[pos];
+                    let t = ((target - a.2) / (b.2 - a.2)) as f32;
+                    (a.0 + (b.0 - a.0) * t, a.1 + (b.1 - a.1) * t)
+                };
+                let dx = wrap_delta(ex - worm.nodes_x[i], wf) / ASPECT;
+                let dy = wrap_delta(ey - worm.nodes_y[i], hf);
+                let d = (dx * dx + dy * dy).sqrt();
+                assert!(
+                    d < 0.5,
+                    "node {i} off the head path by {d} at frame {frame}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn weave_is_present_and_subtle() {
+        let (w, h) = (100, 30);
+        let mut worm = Worm::new(&config(7), w, h);
+        let dt = 1.0 / 30.0;
+        let window = (30.0 / dt) as usize;
+        let mut hd = worm.heading;
+        let mut headings = vec![hd];
+        for _ in 0..window * 2 {
+            worm.update(dt, w, h);
+            hd += wrap_delta(worm.heading - wrap_angle(hd), TAU);
+            headings.push(hd);
+        }
+        let mut residual = Vec::with_capacity(window);
+        for k in window..headings.len() {
+            let mean: f32 = headings[k - window..k].iter().sum::<f32>() / window as f32;
+            residual.push(headings[k] - mean);
+        }
+        let rmin = residual.iter().copied().fold(f32::INFINITY, f32::min);
+        let rmax = residual.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+        let p2p = rmax - rmin;
+        let mean: f32 = residual.iter().sum::<f32>() / residual.len() as f32;
+        let mut sign = 0i32;
+        let mut changes = 0usize;
+        for &r in &residual {
+            let v = r - mean;
+            let s = if v > 0.0 {
+                1
+            } else if v < 0.0 {
+                -1
+            } else {
+                0
+            };
+            if s != 0 {
+                if sign != 0 && s != sign {
+                    changes += 1;
+                }
+                sign = s;
+            }
+        }
+        assert!((0.15..=2.0).contains(&p2p), "weave residual p2p {p2p}");
+        assert!(changes >= 2, "weave residual sign changes {changes}");
+    }
+
+    fn residual_extrema_distances(speed: f32) -> Vec<f32> {
+        let (w, h) = (80, 24);
+        let mut worm = Worm::new(&config(41), w, h);
+        worm.adjust_speed(speed);
+        let dt = 1.0 / 30.0;
+        let window = (30.0 / dt) as usize;
+        let total = (180.0 / dt) as usize;
+        let mut headings = Vec::with_capacity(total + 1);
+        let mut dists = Vec::with_capacity(total + 1);
+        let mut residuals = Vec::with_capacity(total);
+        let mut hd = worm.heading;
+        headings.push(hd);
+        dists.push(worm.dist);
+        for _ in 0..total {
+            worm.update(dt, w, h);
+            hd += wrap_delta(worm.heading - wrap_angle(hd), TAU);
+            headings.push(hd);
+            dists.push(worm.dist);
+            if headings.len() > window {
+                let k = headings.len() - 1;
+                let mean: f32 = headings[k - window..k].iter().sum::<f32>() / window as f32;
+                residuals.push(headings[k] - mean);
+            }
+        }
+        let mut extrema: Vec<f32> = Vec::new();
+        let mut dir = 0i32;
+        let mut last_k = 0usize;
+        for j in 1..residuals.len() {
+            let r = residuals[j];
+            let prev = residuals[j - 1];
+            let d = if r > prev {
+                1
+            } else if r < prev {
+                -1
+            } else {
+                dir
+            };
+            let k = j + window;
+            if dir != 0 && d != dir && k - last_k >= 15 {
+                extrema.push(dists[k] as f32);
+                last_k = k;
+            }
+            if d != 0 {
+                dir = d;
+            }
+        }
+        extrema
+    }
+
+    #[test]
+    fn weave_wavelength_is_speed_invariant() {
+        let slow = residual_extrema_distances(1.0);
+        let fast = residual_extrema_distances(2.0);
+        assert!(slow.len() >= 4, "too few slow extrema: {}", slow.len());
+        assert!(fast.len() >= 4, "too few fast extrema: {}", fast.len());
+        let mean_gap = |v: &[f32]| {
+            let gaps: Vec<f32> = v.windows(2).map(|p| p[1] - p[0]).collect();
+            gaps.iter().sum::<f32>() / gaps.len() as f32
+        };
+        let ms = mean_gap(&slow);
+        let mf = mean_gap(&fast);
+        let ratio = mf / ms;
+        assert!(
+            (0.7..=1.3).contains(&ratio),
+            "wavelength ratio {ratio} (slow {ms}, fast {mf})"
+        );
+    }
+
+    #[test]
+    fn heading_does_not_spin_monotonically() {
+        let (w, h) = (80, 24);
+        let mut worm = Worm::new(&config(53), w, h);
+        let dt = 1.0 / 30.0;
+        let win = (60.0 / dt) as usize;
+        let total = (600.0 / dt) as usize;
+        let mut headings = Vec::with_capacity(total + 1);
+        let mut hd = worm.heading;
+        headings.push(hd);
+        for _ in 0..total {
+            worm.update(dt, w, h);
+            hd += wrap_delta(worm.heading - wrap_angle(hd), TAU);
+            headings.push(hd);
+        }
+        let mut max_net = 0.0f32;
+        for k in 0..headings.len() - win {
+            max_net = max_net.max((headings[k + win] - headings[k]).abs());
+        }
+        assert!(max_net < 4.0, "heading net {max_net} rad over 60 s");
     }
 
     #[test]
