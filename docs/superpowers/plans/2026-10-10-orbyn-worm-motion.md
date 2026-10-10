@@ -1,6 +1,6 @@
 # ORBYN Worm Motion Rework — Implementation Plan
 
-**Status:** Draft (awaiting gate 2)
+**Status:** Approved (final, 2026-10-10)
 **Date:** 2026-10-10
 **Spec:** `docs/superpowers/specs/2026-10-10-orbyn-worm-motion-design.md`
 **Branch:** `worm-mode` (worktree `/home/benyamin/dev/orbyn/.worktrees/worm-mode`)

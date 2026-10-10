@@ -1,6 +1,6 @@
 # ORBYN Worm Motion Rework — Design Spec
 
-**Status:** Draft
+**Status:** Approved (final, 2026-10-10)
 **Date:** 2026-10-10
 **Supersedes by reference:** `docs/superpowers/specs/2026-10-10-orbyn-worm-design.md`
 success criterion 4 and decisions D9/D11 there (spine model and base pose motion);
