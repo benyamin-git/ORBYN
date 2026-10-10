@@ -804,7 +804,7 @@ mod tests {
                 match cell.tone {
                     Tone::Flesh => flesh = true,
                     Tone::Groove => groove = true,
-                    Tone::Blank | Tone::Gore => {}
+                    Tone::Blank | Tone::Gore | Tone::WormDark | Tone::WormMid | Tone::WormHot => {}
                 }
             }
         }
