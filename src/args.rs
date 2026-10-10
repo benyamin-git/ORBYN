@@ -602,4 +602,26 @@ mod tests {
         assert!(text.contains("toggle telemetry (orb) / body detail (carrion, worm)"));
         assert!(text.contains("Body size in text rows"));
     }
+
+    #[test]
+    fn usage_mode_descriptions_share_one_column() {
+        let text = usage();
+        let columns: Vec<usize> = [
+            Being::Orb.description(),
+            Being::Carrion.description(),
+            Being::Worm.description(),
+            "Start directly in a named mode",
+        ]
+        .iter()
+        .map(|desc| {
+            text.lines()
+                .find_map(|line| line.find(desc))
+                .unwrap_or_else(|| panic!("usage missing mode description {desc}"))
+        })
+        .collect();
+        assert!(
+            columns.iter().all(|c| *c == columns[0]),
+            "mode descriptions start at columns {columns:?}"
+        );
+    }
 }

@@ -44,7 +44,7 @@ pub struct Worm {
     detail: bool,
     paused: bool,
     time: f32,
-    noise_time: f32,
+    noise_time: f64,
     nodes_x: [f32; SPINE_N],
     nodes_y: [f32; SPINE_N],
     dirty: Option<(i32, i32, i32, i32)>,
@@ -83,7 +83,7 @@ impl Worm {
 
     pub fn update(&mut self, dt: f32, w: usize, h: usize) {
         self.time = (self.time + dt) % TAU;
-        self.noise_time += dt;
+        self.noise_time += dt as f64;
         self.wander -= dt;
         if self.wander <= 0.0 {
             self.wander = self.rng.range(1.5, 4.0);
@@ -267,8 +267,8 @@ impl Worm {
 
     fn tone_at(&self, along: f32, across: f32, sx: usize, sy: usize) -> Tone {
         let base = noise2(
-            along * TONE_SCALE.0 + self.noise_time * TONE_DRIFT.0,
-            across * TONE_SCALE.1 + self.noise_time * TONE_DRIFT.1,
+            along * TONE_SCALE.0 + (self.noise_time * TONE_DRIFT.0 as f64) as f32,
+            across * TONE_SCALE.1 + (self.noise_time * TONE_DRIFT.1 as f64) as f32,
         );
         let v = base + self.jitter_at(sx, sy);
         if v > TONE_HOT {
@@ -281,7 +281,7 @@ impl Worm {
     }
 
     fn jitter_at(&self, sx: usize, sy: usize) -> f32 {
-        let quantum = (self.noise_time * JITTER_RATE) as u32;
+        let quantum = (self.noise_time * JITTER_RATE as f64) as u32;
         let key = (sx as u32)
             .wrapping_mul(0x9e37_79b9)
             .wrapping_add((sy as u32).wrapping_mul(0x85eb_ca6b))
@@ -292,7 +292,7 @@ impl Worm {
     fn core_glyph(&self, along: f32, across: f32) -> u8 {
         let v = noise2(
             along * DENSITY_SCALE.0 + 7.3,
-            across * DENSITY_SCALE.1 - 3.1 + self.noise_time * DENSITY_DRIFT,
+            across * DENSITY_SCALE.1 - 3.1 + (self.noise_time * DENSITY_DRIFT as f64) as f32,
         );
         if v > 0.86 {
             b'O'
@@ -307,8 +307,8 @@ impl Worm {
 
     fn fringe_visible(&self, along: f32, across: f32, margin: f32) -> bool {
         let spark = noise2(
-            along * SPARK_SCALE.0 + 12.9 + self.noise_time * SPARK_DRIFT.0,
-            across * SPARK_SCALE.1 - 5.7 + self.noise_time * SPARK_DRIFT.1,
+            along * SPARK_SCALE.0 + 12.9 + (self.noise_time * SPARK_DRIFT.0 as f64) as f32,
+            across * SPARK_SCALE.1 - 5.7 + (self.noise_time * SPARK_DRIFT.1 as f64) as f32,
         );
         spark > SPARK_BASE + margin * SPARK_SLOPE
     }
@@ -316,7 +316,7 @@ impl Worm {
     fn fringe_glyph(&self, along: f32, across: f32) -> u8 {
         let v = noise2(
             along * GRAIN_SCALE.0 + 40.1,
-            across * GRAIN_SCALE.1 + 17.3 + self.noise_time * GRAIN_DRIFT,
+            across * GRAIN_SCALE.1 + 17.3 + (self.noise_time * GRAIN_DRIFT as f64) as f32,
         );
         if v > 0.78 {
             b'+'
@@ -385,7 +385,7 @@ fn body_field(
 }
 
 fn auto_thickness(h: usize) -> f32 {
-    (h as f32 * 0.135).clamp(1.5, 12.0)
+    (h as f32 * 0.135).max(1.5)
 }
 
 fn fit_thickness(t: f32, w: usize, h: usize) -> f32 {
@@ -897,7 +897,7 @@ mod tests {
         worm.render(w, h);
         let frame = tones(&worm);
         worm.time = TAU / BREATHE_RATE;
-        worm.noise_time = TAU / BREATHE_RATE;
+        worm.noise_time = (TAU / BREATHE_RATE) as f64;
         worm.render(w, h);
         let (changed, _) = tone_churn(&frame, &tones(&worm));
         assert!(changed > 0, "sampled frames rendered identical tones");
@@ -961,6 +961,36 @@ mod tests {
         assert!(
             crossing.0 * 3 < crossing.1,
             "tone churn spiked across the edge: {crossing:?}"
+        );
+    }
+
+    #[test]
+    fn noise_clock_advances_after_long_uptime() {
+        let (w, h) = (80, 24);
+        let mut worm = Worm::new(&config(11), w, h);
+        worm.noise_time = 3.0e8;
+        let before = worm.noise_time;
+        let dt = 1.0 / 30.0;
+        worm.update(dt, w, h);
+        let advanced = worm.noise_time - before;
+        assert!(
+            (advanced - dt as f64).abs() < 1e-6,
+            "noise clock advanced by {advanced} after long uptime"
+        );
+    }
+
+    #[test]
+    fn auto_thickness_grows_past_old_cap_on_tall_screens() {
+        assert!(
+            auto_thickness(200) > 12.0,
+            "auto thickness {} still capped",
+            auto_thickness(200)
+        );
+        let worm = Worm::new(&config(3), 400, 200);
+        assert!(
+            worm.base_t > 12.0,
+            "fitted auto thickness {} still capped",
+            worm.base_t
         );
     }
 }

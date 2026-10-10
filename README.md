@@ -19,10 +19,9 @@ energy bursts, and drifting telemetry text. `-carrion` replaces it with a red
 flesh creature that has dark grey brain folds, a fading gore trail, and a
 Crawl/Grip/Lunge motion cycle. `-worm` replaces it with a single dark-red ASCII
 worm that curls in slow traveling waves, shimmers between dark, mid, and bright
-red characters, and wraps around the screen edges. Color output falls back
-automatically from
-truecolor to 256, 16, or mono according to the terminal, `COLORTERM`, `TERM`,
-and `NO_COLOR`.
+red characters, and wraps around the screen edges. Color output
+falls back automatically from truecolor to 256, 16, or mono according to the
+terminal, `COLORTERM`, `TERM`, and `NO_COLOR`.
 
 ## Build and install
 
@@ -102,7 +101,7 @@ Use a dark terminal theme.
 | `-worm`, `--worm` | Use the dark-red ASCII worm instead of the orb | orb |
 | `-s`, `--speed <FLOAT>` | Motion speed multiplier, 0.05–20.0 | `1.0` |
 | `--fps <N>` | Frames per second, 1–240 | `30` |
-| `--size <ROWS>` | Body radius in text rows, 1–60 | auto |
+| `--size <ROWS>` | Body size in text rows | auto |
 | `--trail <FLOAT>` | Trail persistence, 0.0–0.97; higher is longer | `0.82` |
 | `--color <MODE>` | `auto`, `truecolor`, `256`, `16`, or `mono` | `auto` |
 | `--hud <N>` | Telemetry fragments, 0–64 | `6` |

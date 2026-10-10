@@ -919,48 +919,42 @@ mod tests {
     }
 
     #[test]
-    fn worm_fallback_palette_stays_in_range() {
-        let tones = [Tone::Blank, Tone::WormDark, Tone::WormMid, Tone::WormHot];
-        for mode in [
-            ColorMode::TrueColor,
-            ColorMode::Ansi256,
-            ColorMode::Ansi16,
-            ColorMode::Mono,
-        ] {
-            for tone in tones {
-                for step in 0..=10 {
-                    let cell = crate::scene::Cell {
-                        v: step as f32 / 10.0,
-                        ch: 0,
-                        tone,
-                    };
-                    let out = worm_cell(&cell, mode);
-                    match mode {
-                        ColorMode::TrueColor | ColorMode::Auto => {
-                            assert!(matches!(
-                                out.color,
-                                Color::Default | WORM_DARK_RED | WORM_MID_RED | WORM_HOT_RED
-                            ));
-                        }
-                        ColorMode::Ansi256 => {
-                            assert!(matches!(
-                                out.color,
-                                Color::Default
-                                    | Color::Indexed(52)
-                                    | Color::Indexed(160)
-                                    | Color::Indexed(203)
-                            ));
-                        }
-                        ColorMode::Ansi16 => {
-                            assert!(matches!(
-                                out.color,
-                                Color::Default | Color::Basic(31) | Color::Basic(91)
-                            ));
-                        }
-                        ColorMode::Mono => assert_eq!(out.color, Color::Default),
-                    }
-                }
+    fn worm_fallback_palette_is_exact_per_mode() {
+        let cases = [
+            (
+                ColorMode::TrueColor,
+                [WORM_DARK_RED, WORM_MID_RED, WORM_HOT_RED],
+            ),
+            (
+                ColorMode::Ansi256,
+                [Color::Indexed(52), Color::Indexed(160), Color::Indexed(203)],
+            ),
+            (
+                ColorMode::Ansi16,
+                [Color::Basic(31), Color::Basic(91), Color::Basic(91)],
+            ),
+            (
+                ColorMode::Mono,
+                [Color::Default, Color::Default, Color::Default],
+            ),
+        ];
+        let tones = [Tone::WormDark, Tone::WormMid, Tone::WormHot];
+        for (mode, expected) in cases {
+            let mid = expected[1];
+            for (tone, want) in tones.iter().zip(expected) {
+                let out = worm_cell(&lit(*tone), mode);
+                assert_eq!(
+                    out.color, want,
+                    "tone {tone:?} in {mode:?} mapped to {:?}",
+                    out.color
+                );
             }
+            let blank = worm_cell(&lit(Tone::Blank), mode);
+            assert_eq!(
+                blank.color, mid,
+                "lit blank in {mode:?} mapped to {:?}",
+                blank.color
+            );
         }
     }
 
