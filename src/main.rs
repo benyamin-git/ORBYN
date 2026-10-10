@@ -9,6 +9,8 @@ mod rng;
 mod rotation;
 mod scene;
 mod term;
+#[allow(dead_code)]
+mod worm;
 
 use std::io::{self, IsTerminal};
 use std::time::{Duration, Instant};
