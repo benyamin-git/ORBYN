@@ -7,13 +7,25 @@ use crate::ASPECT;
 
 const SPINE_N: usize = 24;
 const LENGTH_RATIO: f32 = 10.0;
-const FRINGE_MARGIN: f32 = 2.0;
+const FRINGE_MARGIN: f32 = 1.0;
 const NODE_K: f32 = 9.0;
 const CHAIN_CURL: f32 = 0.18;
 const WAVE_AMP: f32 = 0.22;
 const WAVE_SPEED: f32 = 1.4;
 const WAVE_K: f32 = 0.55;
 const SPAN_RATIO: f32 = 6.6;
+const TONE_SCALE: (f32, f32) = (0.16, 0.20);
+const TONE_DRIFT: (f32, f32) = (0.22, -0.13);
+const TONE_HOT: f32 = 0.62;
+const TONE_DARK: f32 = 0.38;
+const JITTER_AMP: f32 = 0.16;
+const JITTER_RATE: f32 = 2.5;
+const DENSITY_SCALE: (f32, f32) = (0.21, 0.27);
+const DENSITY_DRIFT: f32 = 0.09;
+const SPARK_SCALE: (f32, f32) = (0.34, 0.42);
+const SPARK_BASE: f32 = 0.42;
+const SPARK_SLOPE: f32 = 0.45;
+const GRAIN_SCALE: (f32, f32) = (0.71, 0.63);
 
 type Rect = (usize, usize, usize, usize);
 
@@ -218,13 +230,93 @@ impl Worm {
             let sy = yy.rem_euclid(hi) as usize;
             for xx in x0..x1 {
                 let px = xx as f32 + 0.5;
-                if covered(px, py, &ux, &uy, &radii) {
-                    let sx = xx.rem_euclid(wi) as usize;
-                    self.grid.paint(sx, sy, b'#', Tone::WormMid);
+                let sx = xx.rem_euclid(wi) as usize;
+                let margin = body_margin(px, py, &ux, &uy, &radii);
+                if margin <= 0.0 {
+                    let tone = self.tone_at(px, py, sx, sy);
+                    let ch = if self.detail {
+                        self.core_glyph(px, py)
+                    } else {
+                        b'#'
+                    };
+                    self.grid.paint(sx, sy, ch, tone);
+                } else if self.detail
+                    && margin <= FRINGE_MARGIN
+                    && self.fringe_visible(px, py, margin)
+                {
+                    let tone = self.tone_at(px, py, sx, sy);
+                    let ch = self.fringe_glyph(px, py);
+                    self.grid.paint(sx, sy, ch, tone);
                 }
             }
         }
         self.dirty = Some((x0, y0, x1, y1));
+    }
+
+    fn tone_at(&self, px: f32, py: f32, sx: usize, sy: usize) -> Tone {
+        let base = noise2(
+            px * TONE_SCALE.0 + self.time * TONE_DRIFT.0,
+            py * TONE_SCALE.1 + self.time * TONE_DRIFT.1,
+        );
+        let v = base + self.jitter_at(sx, sy);
+        if v > TONE_HOT {
+            Tone::WormHot
+        } else if v > TONE_DARK {
+            Tone::WormMid
+        } else {
+            Tone::WormDark
+        }
+    }
+
+    fn jitter_at(&self, sx: usize, sy: usize) -> f32 {
+        let quantum = (self.time * JITTER_RATE) as u32;
+        let key = (sx as u32)
+            .wrapping_mul(0x9e37_79b9)
+            .wrapping_add((sy as u32).wrapping_mul(0x85eb_ca6b))
+            .wrapping_add(hash_u32(quantum));
+        (hash_unit(hash_u32(key)) - 0.5) * JITTER_AMP
+    }
+
+    fn core_glyph(&self, px: f32, py: f32) -> u8 {
+        let v = noise2(
+            px * DENSITY_SCALE.0 + 7.3,
+            py * DENSITY_SCALE.1 - 3.1 + self.time * DENSITY_DRIFT,
+        );
+        if v > 0.86 {
+            b'O'
+        } else if v > 0.68 {
+            b'X'
+        } else if v > 0.46 {
+            b'%'
+        } else {
+            b'#'
+        }
+    }
+
+    fn fringe_visible(&self, px: f32, py: f32, margin: f32) -> bool {
+        let spark = noise2(
+            px * SPARK_SCALE.0 + 12.9 + self.time * 0.31,
+            py * SPARK_SCALE.1 - 5.7 - self.time * 0.17,
+        );
+        spark > SPARK_BASE + margin * SPARK_SLOPE
+    }
+
+    fn fringe_glyph(&self, px: f32, py: f32) -> u8 {
+        let v = noise2(
+            px * GRAIN_SCALE.0 + 40.1,
+            py * GRAIN_SCALE.1 + 17.3 + self.time * 0.23,
+        );
+        if v > 0.78 {
+            b'+'
+        } else if v > 0.60 {
+            b'='
+        } else if v > 0.45 {
+            b'-'
+        } else if v > 0.30 {
+            b':'
+        } else {
+            b'.'
+        }
     }
 
     fn node_radii(&self) -> [f32; SPINE_N] {
@@ -239,13 +331,14 @@ impl Worm {
     }
 }
 
-fn covered(
+fn body_margin(
     px: f32,
     py: f32,
     ux: &[f32; SPINE_N],
     uy: &[f32; SPINE_N],
     radii: &[f32; SPINE_N],
-) -> bool {
+) -> f32 {
+    let mut best = f32::INFINITY;
     for i in 0..SPINE_N - 1 {
         let ax = ux[i];
         let ay = uy[i];
@@ -264,11 +357,12 @@ fn covered(
         let ddx = (px - nx) / ASPECT;
         let ddy = py - ny;
         let r = radii[i] + (radii[i + 1] - radii[i]) * t;
-        if ddx * ddx + ddy * ddy <= r * r {
-            return true;
+        let margin = (ddx * ddx + ddy * ddy).sqrt() - r;
+        if margin < best {
+            best = margin;
         }
     }
-    false
+    best
 }
 
 fn auto_thickness(h: usize) -> f32 {
@@ -584,5 +678,180 @@ mod tests {
         let rects = wrap_rects(2, 3, 8, 9, 40, 20);
         assert_eq!(rects[0], (2, 3, 8, 9));
         assert_eq!(rects[1], (0, 0, 0, 0));
+    }
+
+    const ALLOWED_GLYPHS: &[u8] = b"#%XO+=-:.";
+    const CORE_GLYPHS: &[u8] = b"#%XO";
+    const FRINGE_GLYPHS: &[u8] = b"+=-:.";
+
+    fn lit_count(worm: &Worm) -> usize {
+        worm.grid
+            .data
+            .iter()
+            .filter(|c| c.tone != Tone::Blank)
+            .count()
+    }
+
+    #[test]
+    fn only_allowed_glyphs() {
+        let (w, h) = (80, 24);
+        let mut worm = Worm::new(&config(7), w, h);
+        let mut seen = [false; 4];
+        for _ in 0..240 {
+            worm.update(1.0 / 30.0, w, h);
+            assert!(lit_count(&worm) > 0);
+            for cell in &worm.grid.data {
+                if cell.tone == Tone::Blank {
+                    continue;
+                }
+                assert!(
+                    ALLOWED_GLYPHS.contains(&cell.ch),
+                    "lit glyph {:?} outside the nine-glyph set",
+                    cell.ch as char
+                );
+                if let Some(i) = CORE_GLYPHS.iter().position(|g| *g == cell.ch) {
+                    seen[i] = true;
+                }
+            }
+        }
+        assert!(
+            seen.iter().all(|s| *s),
+            "core glyph variety missing: {seen:?}"
+        );
+    }
+
+    #[test]
+    fn only_worm_tones() {
+        let (w, h) = (80, 24);
+        let mut worm = Worm::new(&config(7), w, h);
+        let mut tones = [false; 3];
+        for _ in 0..240 {
+            worm.update(1.0 / 30.0, w, h);
+            assert!(lit_count(&worm) > 0);
+            for cell in &worm.grid.data {
+                if cell.tone == Tone::Blank {
+                    continue;
+                }
+                match cell.tone {
+                    Tone::WormDark => tones[0] = true,
+                    Tone::WormMid => tones[1] = true,
+                    Tone::WormHot => tones[2] = true,
+                    other => panic!("lit cell tone {other:?} outside worm palette"),
+                }
+            }
+        }
+        assert!(
+            tones.iter().filter(|t| **t).count() >= 2,
+            "worm palette barely used: {tones:?}"
+        );
+    }
+
+    #[test]
+    fn fringe_present_when_detail_on() {
+        let (w, h) = (80, 24);
+        let mut worm = Worm::new(&config(7), w, h);
+        let mut fringe = 0usize;
+        let mut core = 0usize;
+        for _ in 0..240 {
+            worm.update(1.0 / 30.0, w, h);
+            for cell in &worm.grid.data {
+                if cell.tone == Tone::Blank {
+                    continue;
+                }
+                if FRINGE_GLYPHS.contains(&cell.ch) {
+                    fringe += 1;
+                }
+                if CORE_GLYPHS.contains(&cell.ch) {
+                    core += 1;
+                }
+            }
+        }
+        assert!(fringe > 0, "no fringe glyphs while detail is on");
+        assert!(core > 0, "no core glyphs while detail is on");
+    }
+
+    #[test]
+    fn fringe_absent_when_detail_off() {
+        let (w, h) = (80, 24);
+        let mut worm = Worm::new(&config(7), w, h);
+        for _ in 0..120 {
+            worm.update(1.0 / 30.0, w, h);
+        }
+        worm.toggle_detail();
+        for _ in 0..240 {
+            worm.update(1.0 / 30.0, w, h);
+            let mut core = 0usize;
+            for cell in &worm.grid.data {
+                if cell.tone == Tone::Blank {
+                    continue;
+                }
+                assert!(
+                    !FRINGE_GLYPHS.contains(&cell.ch),
+                    "fringe glyph {:?} while detail is off",
+                    cell.ch as char
+                );
+                if CORE_GLYPHS.contains(&cell.ch) {
+                    core += 1;
+                }
+            }
+            assert!(core > 0, "core missing while detail is off");
+        }
+    }
+
+    #[test]
+    fn hot_tones_appear_across_the_body() {
+        let (w, h) = (100, 30);
+        let mut worm = Worm::new(&config(11), w, h);
+        let mut interior = false;
+        let mut edge = false;
+        for _ in 0..1200 {
+            worm.update(1.0 / 30.0, w, h);
+            for y in 0..h {
+                for x in 0..w {
+                    if worm.grid.data[y * w + x].tone != Tone::WormHot {
+                        continue;
+                    }
+                    let neighbors = [
+                        ((x + w - 1) % w, y),
+                        ((x + 1) % w, y),
+                        (x, (y + h - 1) % h),
+                        (x, (y + 1) % h),
+                    ];
+                    let lit = neighbors
+                        .iter()
+                        .filter(|(nx, ny)| worm.grid.data[ny * w + nx].tone != Tone::Blank)
+                        .count();
+                    edge |= lit < neighbors.len();
+                    interior |= lit == neighbors.len();
+                }
+            }
+            if interior && edge {
+                break;
+            }
+        }
+        assert!(interior, "no WormHot cells in the body interior");
+        assert!(edge, "no WormHot cells adjacent to blank cells");
+    }
+
+    #[test]
+    fn shimmer_changes_over_time() {
+        let (w, h) = (80, 24);
+        let mut worm = Worm::new(&config(23), w, h);
+        for _ in 0..90 {
+            worm.update(1.0 / 30.0, w, h);
+        }
+        worm.time = 0.0;
+        worm.render(w, h);
+        let before: Vec<Tone> = worm.grid.data.iter().map(|c| c.tone).collect();
+        worm.time = 3.0;
+        worm.render(w, h);
+        let changed = before
+            .iter()
+            .zip(worm.grid.data.iter())
+            .filter(|(old, new)| {
+                **old != Tone::Blank && new.tone != Tone::Blank && **old != new.tone
+            })
+            .count();
+        assert!(changed > 0, "tones did not change between sampled frames");
     }
 }
