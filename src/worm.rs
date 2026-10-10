@@ -187,9 +187,11 @@ impl Worm {
         let anchor_y = self.nodes_y[0];
         let mut ux = [0.0f32; SPINE_N];
         let mut uy = [0.0f32; SPINE_N];
-        for i in 0..SPINE_N {
-            ux[i] = anchor_x + wrap_delta(self.nodes_x[i] - anchor_x, wf);
-            uy[i] = anchor_y + wrap_delta(self.nodes_y[i] - anchor_y, hf);
+        ux[0] = anchor_x;
+        uy[0] = anchor_y;
+        for i in 1..SPINE_N {
+            ux[i] = ux[i - 1] + wrap_delta(self.nodes_x[i] - ux[i - 1], wf);
+            uy[i] = uy[i - 1] + wrap_delta(self.nodes_y[i] - uy[i - 1], hf);
         }
         let radii = self.node_radii();
         let max_r = radii.iter().copied().fold(0.0f32, f32::max);
@@ -470,6 +472,19 @@ mod tests {
         worm.snap();
         worm.render(w, h);
         assert_eq!(worm.grid.data[20 * w + 70].tone, Tone::Blank);
+    }
+
+    #[test]
+    fn straight_chain_has_no_phantom_seam_cells() {
+        let (w, h) = (80, 24);
+        let mut worm = Worm::new(&config(5), w, h);
+        worm.heading = PI;
+        worm.nodes_x[0] = 40.0;
+        worm.nodes_y[0] = 12.0;
+        worm.snap();
+        worm.render(w, h);
+        assert_eq!(worm.grid.data[12 * w + 30].tone, Tone::Blank);
+        assert_ne!(worm.grid.data[12 * w + 22].tone, Tone::Blank);
     }
 
     #[test]
