@@ -21,7 +21,7 @@ const AVOID_MARGIN: f32 = 1.5;
 const CONTACT: f32 = 2.0;
 const RELEASE: f32 = 2.5;
 const ESCAPE_SEC: f32 = 5.0;
-const ESCAPE_RELEASE: f32 = 2.0 * SENSE_RADIUS;
+const ESCAPE_RELEASE: f32 = 1.0 * SENSE_RADIUS;
 const AVOID_EPS: f32 = 1e-3;
 const SPAN_RATIO: f32 = 6.6;
 const BREATHE_RATE: f32 = 1.7;
@@ -64,6 +64,8 @@ pub struct Worm {
     blocked_time: f32,
     escaping: bool,
     escapes: u32,
+    #[cfg(test)]
+    avoid: bool,
     nodes_x: [f32; SPINE_N],
     nodes_y: [f32; SPINE_N],
     dirty: Option<(i32, i32, i32, i32)>,
@@ -99,6 +101,8 @@ impl Worm {
             blocked_time: 0.0,
             escaping: false,
             escapes: 0,
+            #[cfg(test)]
+            avoid: true,
             nodes_x: [0.0; SPINE_N],
             nodes_y: [0.0; SPINE_N],
             dirty: None,
@@ -253,7 +257,11 @@ impl Worm {
 
     fn advance_heading(&mut self, dt: f32, repulsion: (f32, f32)) {
         let (rx, ry) = repulsion;
-        let target = if !self.escaping && rx * rx + ry * ry > AVOID_EPS * AVOID_EPS {
+        #[cfg(test)]
+        let avoiding = self.avoid && !self.escaping;
+        #[cfg(not(test))]
+        let avoiding = !self.escaping;
+        let target = if avoiding && rx * rx + ry * ry > AVOID_EPS * AVOID_EPS {
             ry.atan2(rx)
         } else {
             self.desired_heading()
@@ -825,12 +833,9 @@ mod tests {
     fn residual_extrema_distances(speed: f32) -> Vec<f32> {
         let (w, h) = (80, 24);
         let mut worm = Worm::new(&config(41), w, h);
-        let dt = 1.0 / 30.0;
-        for _ in 0..120 {
-            worm.step(dt, w, h);
-        }
-        worm.escaping = true;
+        worm.avoid = false;
         worm.adjust_speed(speed);
+        let dt = 1.0 / 30.0;
         let window = (30.0 / dt) as usize;
         let total = (180.0 / dt) as usize;
         let mut headings = Vec::with_capacity(total + 1);
@@ -1119,11 +1124,15 @@ mod tests {
         worm.course = 0.0;
         worm.place_nodes(w, h);
         let mut escaped_at: Option<usize> = None;
+        let mut cleared_at: Option<usize> = None;
         let mut left_circle = false;
         for frame in 0..1200 {
             worm.update(dt, w, h);
             if escaped_at.is_none() && worm.escapes >= 1 {
                 escaped_at = Some(frame);
+            }
+            if escaped_at.is_some() && cleared_at.is_none() && !worm.escaping {
+                cleared_at = Some(frame);
             }
             let dx = wrap_delta(worm.nodes_x[0] - cx, w as f32) / ASPECT;
             let dy = wrap_delta(worm.nodes_y[0] - cy, h as f32);
@@ -1135,7 +1144,9 @@ mod tests {
             "escape valve fired at frame {escaped_at}"
         );
         assert!(left_circle, "worm never left the circle");
-        assert!(!worm.escaping, "escaping never re-armed after the escape");
+        let cleared_at = cleared_at.expect("escaping never re-armed after the escape");
+        eprintln!("escaped at {escaped_at} cleared at {cleared_at}");
+        assert!(!worm.escaping, "escaping active at the end of the run");
     }
 
     #[test]
