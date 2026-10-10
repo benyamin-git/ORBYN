@@ -15,18 +15,20 @@ const WAVE_SPEED: f32 = 1.4;
 const WAVE_K: f32 = 0.55;
 const SPAN_RATIO: f32 = 6.6;
 const BREATHE_RATE: f32 = 1.7;
-const TONE_SCALE: (f32, f32) = (0.16, 0.20);
+const TONE_SCALE: (f32, f32) = (0.32, 0.20);
 const TONE_DRIFT: (f32, f32) = (0.22, -0.13);
 const TONE_HOT: f32 = 0.62;
 const TONE_DARK: f32 = 0.38;
 const JITTER_AMP: f32 = 0.16;
 const JITTER_RATE: f32 = 2.5;
-const DENSITY_SCALE: (f32, f32) = (0.21, 0.27);
+const DENSITY_SCALE: (f32, f32) = (0.42, 0.27);
 const DENSITY_DRIFT: f32 = 0.09;
-const SPARK_SCALE: (f32, f32) = (0.34, 0.42);
+const SPARK_SCALE: (f32, f32) = (0.68, 0.42);
+const SPARK_DRIFT: (f32, f32) = (0.31, -0.17);
 const SPARK_BASE: f32 = 0.42;
 const SPARK_SLOPE: f32 = 0.45;
-const GRAIN_SCALE: (f32, f32) = (0.71, 0.63);
+const GRAIN_SCALE: (f32, f32) = (1.42, 0.63);
+const GRAIN_DRIFT: f32 = 0.23;
 
 type Rect = (usize, usize, usize, usize);
 
@@ -42,6 +44,7 @@ pub struct Worm {
     detail: bool,
     paused: bool,
     time: f32,
+    noise_time: f32,
     nodes_x: [f32; SPINE_N],
     nodes_y: [f32; SPINE_N],
     dirty: Option<(i32, i32, i32, i32)>,
@@ -67,6 +70,7 @@ impl Worm {
             detail: true,
             paused: false,
             time: 0.0,
+            noise_time: 0.0,
             nodes_x: [0.0; SPINE_N],
             nodes_y: [0.0; SPINE_N],
             dirty: None,
@@ -79,6 +83,7 @@ impl Worm {
 
     pub fn update(&mut self, dt: f32, w: usize, h: usize) {
         self.time = (self.time + dt) % TAU;
+        self.noise_time += dt;
         self.wander -= dt;
         if self.wander <= 0.0 {
             self.wander = self.rng.range(1.5, 4.0);
@@ -208,6 +213,12 @@ impl Worm {
         }
         let radii = self.node_radii();
         let max_r = radii.iter().copied().fold(0.0f32, f32::max);
+        let mut arc = [0.0f32; SPINE_N];
+        for i in 1..SPINE_N {
+            let dx = (ux[i] - ux[i - 1]) / ASPECT;
+            let dy = uy[i] - uy[i - 1];
+            arc[i] = arc[i - 1] + (dx * dx + dy * dy).sqrt();
+        }
         let reach_x = (max_r + FRINGE_MARGIN) * ASPECT + 1.0;
         let reach_y = max_r + FRINGE_MARGIN + 1.0;
         let mut min_x = f32::INFINITY;
@@ -232,21 +243,21 @@ impl Worm {
             for xx in x0..x1 {
                 let px = xx as f32 + 0.5;
                 let sx = xx.rem_euclid(wi) as usize;
-                let margin = body_margin(px, py, &ux, &uy, &radii);
+                let (margin, along, across) = body_field(px, py, &ux, &uy, &radii, &arc);
                 if margin <= 0.0 {
-                    let tone = self.tone_at(px, py, sx, sy);
+                    let tone = self.tone_at(along, across, sx, sy);
                     let ch = if self.detail {
-                        self.core_glyph(px, py)
+                        self.core_glyph(along, across)
                     } else {
                         b'#'
                     };
                     self.grid.paint(sx, sy, ch, tone);
                 } else if self.detail
                     && margin <= FRINGE_MARGIN
-                    && self.fringe_visible(px, py, margin)
+                    && self.fringe_visible(along, across, margin)
                 {
-                    let tone = self.tone_at(px, py, sx, sy);
-                    let ch = self.fringe_glyph(px, py);
+                    let tone = self.tone_at(along, across, sx, sy);
+                    let ch = self.fringe_glyph(along, across);
                     self.grid.paint(sx, sy, ch, tone);
                 }
             }
@@ -254,10 +265,10 @@ impl Worm {
         self.dirty = Some((x0, y0, x1, y1));
     }
 
-    fn tone_at(&self, px: f32, py: f32, sx: usize, sy: usize) -> Tone {
+    fn tone_at(&self, along: f32, across: f32, sx: usize, sy: usize) -> Tone {
         let base = noise2(
-            px * TONE_SCALE.0 + self.time * TONE_DRIFT.0,
-            py * TONE_SCALE.1 + self.time * TONE_DRIFT.1,
+            along * TONE_SCALE.0 + self.noise_time * TONE_DRIFT.0,
+            across * TONE_SCALE.1 + self.noise_time * TONE_DRIFT.1,
         );
         let v = base + self.jitter_at(sx, sy);
         if v > TONE_HOT {
@@ -270,7 +281,7 @@ impl Worm {
     }
 
     fn jitter_at(&self, sx: usize, sy: usize) -> f32 {
-        let quantum = (self.time * JITTER_RATE) as u32;
+        let quantum = (self.noise_time * JITTER_RATE) as u32;
         let key = (sx as u32)
             .wrapping_mul(0x9e37_79b9)
             .wrapping_add((sy as u32).wrapping_mul(0x85eb_ca6b))
@@ -278,10 +289,10 @@ impl Worm {
         (hash_unit(hash_u32(key)) - 0.5) * JITTER_AMP
     }
 
-    fn core_glyph(&self, px: f32, py: f32) -> u8 {
+    fn core_glyph(&self, along: f32, across: f32) -> u8 {
         let v = noise2(
-            px * DENSITY_SCALE.0 + 7.3,
-            py * DENSITY_SCALE.1 - 3.1 + self.time * DENSITY_DRIFT,
+            along * DENSITY_SCALE.0 + 7.3,
+            across * DENSITY_SCALE.1 - 3.1 + self.noise_time * DENSITY_DRIFT,
         );
         if v > 0.86 {
             b'O'
@@ -294,18 +305,18 @@ impl Worm {
         }
     }
 
-    fn fringe_visible(&self, px: f32, py: f32, margin: f32) -> bool {
+    fn fringe_visible(&self, along: f32, across: f32, margin: f32) -> bool {
         let spark = noise2(
-            px * SPARK_SCALE.0 + 12.9 + self.time * 0.31,
-            py * SPARK_SCALE.1 - 5.7 - self.time * 0.17,
+            along * SPARK_SCALE.0 + 12.9 + self.noise_time * SPARK_DRIFT.0,
+            across * SPARK_SCALE.1 - 5.7 + self.noise_time * SPARK_DRIFT.1,
         );
         spark > SPARK_BASE + margin * SPARK_SLOPE
     }
 
-    fn fringe_glyph(&self, px: f32, py: f32) -> u8 {
+    fn fringe_glyph(&self, along: f32, across: f32) -> u8 {
         let v = noise2(
-            px * GRAIN_SCALE.0 + 40.1,
-            py * GRAIN_SCALE.1 + 17.3 + self.time * 0.23,
+            along * GRAIN_SCALE.0 + 40.1,
+            across * GRAIN_SCALE.1 + 17.3 + self.noise_time * GRAIN_DRIFT,
         );
         if v > 0.78 {
             b'+'
@@ -332,14 +343,17 @@ impl Worm {
     }
 }
 
-fn body_margin(
+fn body_field(
     px: f32,
     py: f32,
     ux: &[f32; SPINE_N],
     uy: &[f32; SPINE_N],
     radii: &[f32; SPINE_N],
-) -> f32 {
+    arc: &[f32; SPINE_N],
+) -> (f32, f32, f32) {
     let mut best = f32::INFINITY;
+    let mut along = 0.0;
+    let mut across = 0.0;
     for i in 0..SPINE_N - 1 {
         let ax = ux[i];
         let ay = uy[i];
@@ -357,13 +371,17 @@ fn body_margin(
         let ny = ay + dy * t;
         let ddx = (px - nx) / ASPECT;
         let ddy = py - ny;
+        let dist = (ddx * ddx + ddy * ddy).sqrt();
         let r = radii[i] + (radii[i + 1] - radii[i]) * t;
-        let margin = (ddx * ddx + ddy * ddy).sqrt() - r;
+        let margin = dist - r;
         if margin < best {
             best = margin;
+            along = arc[i] + (arc[i + 1] - arc[i]) * t;
+            let side = (dx / ASPECT) * ddy - dy * ddx;
+            across = if side < 0.0 { -dist } else { dist };
         }
     }
-    best
+    (best, along, across)
 }
 
 fn auto_thickness(h: usize) -> f32 {
@@ -834,6 +852,24 @@ mod tests {
         assert!(edge, "no WormHot cells adjacent to blank cells");
     }
 
+    fn tone_churn(before: &[Tone], after: &[Tone]) -> (usize, usize) {
+        let mut changed = 0usize;
+        let mut common = 0usize;
+        for (a, b) in before.iter().zip(after.iter()) {
+            if *a != Tone::Blank && *b != Tone::Blank {
+                common += 1;
+                if a != b {
+                    changed += 1;
+                }
+            }
+        }
+        (changed, common)
+    }
+
+    fn tones(worm: &Worm) -> Vec<Tone> {
+        worm.grid.data.iter().map(|c| c.tone).collect()
+    }
+
     #[test]
     fn shimmer_changes_over_time() {
         let (w, h) = (80, 24);
@@ -841,33 +877,90 @@ mod tests {
         for _ in 0..90 {
             worm.update(1.0 / 30.0, w, h);
         }
-        worm.time = 0.0;
-        worm.render(w, h);
-        let frame: Vec<Tone> = worm.grid.data.iter().map(|c| c.tone).collect();
         let mut sampled = 0usize;
-        for y in 0..h {
-            for x in 0..w {
-                let px = x as f32 + 0.5;
-                let py = y as f32 + 0.5;
-                worm.time = 0.0;
-                let before = worm.tone_at(px, py, x, y);
-                worm.time = TAU / BREATHE_RATE;
-                let after = worm.tone_at(px, py, x, y);
+        for row in 0..24 {
+            for col in 0..32 {
+                let along = col as f32 * 0.4 + 0.5;
+                let across = (row as f32 - 12.0) * 0.35;
+                worm.noise_time = 0.0;
+                let before = worm.tone_at(along, across, col, row);
+                worm.noise_time = 3.0;
+                let after = worm.tone_at(along, across, col, row);
                 if before != after {
                     sampled += 1;
                 }
             }
         }
         assert!(sampled > 0, "per-cell tones did not change over time");
-        worm.time = TAU / BREATHE_RATE;
+        worm.time = 0.0;
+        worm.noise_time = 0.0;
         worm.render(w, h);
-        let changed = frame
-            .iter()
-            .zip(worm.grid.data.iter())
-            .filter(|(old, new)| {
-                **old != Tone::Blank && new.tone != Tone::Blank && **old != new.tone
-            })
-            .count();
+        let frame = tones(&worm);
+        worm.time = TAU / BREATHE_RATE;
+        worm.noise_time = TAU / BREATHE_RATE;
+        worm.render(w, h);
+        let (changed, _) = tone_churn(&frame, &tones(&worm));
         assert!(changed > 0, "sampled frames rendered identical tones");
+    }
+
+    #[test]
+    fn tone_churn_stays_bounded_across_time_wrap() {
+        let (w, h) = (80, 24);
+        let mut worm = Worm::new(&config(31), w, h);
+        for _ in 0..300 {
+            worm.update(1.0 / 30.0, w, h);
+        }
+        worm.time = TAU - 0.1;
+        let mut prev = tones(&worm);
+        let mut crossed = false;
+        let mut crossing = (0usize, 0usize);
+        for _ in 0..20 {
+            let before = worm.time;
+            worm.update(1.0 / 30.0, w, h);
+            let wrapped = worm.time < before;
+            crossed |= wrapped;
+            let cur = tones(&worm);
+            let churn = tone_churn(&prev, &cur);
+            if wrapped {
+                crossing = churn;
+            }
+            prev = cur;
+        }
+        assert!(crossed, "time never wrapped during the sample");
+        assert!(
+            crossing.0 * 3 < crossing.1,
+            "tone churn spiked across the wrap: {crossing:?}"
+        );
+    }
+
+    #[test]
+    fn texture_stays_continuous_across_edge_crossing() {
+        let (w, h) = (80, 24);
+        let mut worm = Worm::new(&config(37), w, h);
+        worm.heading = PI;
+        worm.nodes_x[0] = 3.0;
+        worm.nodes_y[0] = 12.0;
+        worm.snap();
+        worm.render(w, h);
+        let mut prev = tones(&worm);
+        let mut crossed = false;
+        let mut crossing = (0usize, 0usize);
+        for _ in 0..40 {
+            let before = worm.nodes_x[0];
+            worm.update(1.0 / 30.0, w, h);
+            let jumped = before < 5.0 && worm.nodes_x[0] > w as f32 - 5.0;
+            crossed |= jumped;
+            let cur = tones(&worm);
+            let churn = tone_churn(&prev, &cur);
+            if jumped {
+                crossing = churn;
+            }
+            prev = cur;
+        }
+        assert!(crossed, "head never crossed the screen edge");
+        assert!(
+            crossing.0 * 3 < crossing.1,
+            "tone churn spiked across the edge: {crossing:?}"
+        );
     }
 }
