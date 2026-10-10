@@ -14,6 +14,7 @@ const WAVE_AMP: f32 = 0.22;
 const WAVE_SPEED: f32 = 1.4;
 const WAVE_K: f32 = 0.55;
 const SPAN_RATIO: f32 = 6.6;
+const BREATHE_RATE: f32 = 1.7;
 const TONE_SCALE: (f32, f32) = (0.16, 0.20);
 const TONE_DRIFT: (f32, f32) = (0.22, -0.13);
 const TONE_HOT: f32 = 0.62;
@@ -324,7 +325,7 @@ impl Worm {
         for (i, r) in radii.iter_mut().enumerate() {
             let u = (i as f32 + 0.5) / SPINE_N as f32;
             let taper = 0.72 + 0.28 * (PI * u).sin();
-            let breathe = 1.0 + 0.08 * (self.time * 1.7 + i as f32 * 0.9).sin();
+            let breathe = 1.0 + 0.08 * (self.time * BREATHE_RATE + i as f32 * 0.9).sin();
             *r = self.base_t * taper * breathe;
         }
         radii
@@ -842,16 +843,31 @@ mod tests {
         }
         worm.time = 0.0;
         worm.render(w, h);
-        let before: Vec<Tone> = worm.grid.data.iter().map(|c| c.tone).collect();
-        worm.time = 3.0;
+        let frame: Vec<Tone> = worm.grid.data.iter().map(|c| c.tone).collect();
+        let mut sampled = 0usize;
+        for y in 0..h {
+            for x in 0..w {
+                let px = x as f32 + 0.5;
+                let py = y as f32 + 0.5;
+                worm.time = 0.0;
+                let before = worm.tone_at(px, py, x, y);
+                worm.time = TAU / BREATHE_RATE;
+                let after = worm.tone_at(px, py, x, y);
+                if before != after {
+                    sampled += 1;
+                }
+            }
+        }
+        assert!(sampled > 0, "per-cell tones did not change over time");
+        worm.time = TAU / BREATHE_RATE;
         worm.render(w, h);
-        let changed = before
+        let changed = frame
             .iter()
             .zip(worm.grid.data.iter())
             .filter(|(old, new)| {
                 **old != Tone::Blank && new.tone != Tone::Blank && **old != new.tone
             })
             .count();
-        assert!(changed > 0, "tones did not change between sampled frames");
+        assert!(changed > 0, "sampled frames rendered identical tones");
     }
 }
