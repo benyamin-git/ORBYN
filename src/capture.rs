@@ -152,6 +152,21 @@ mod tests {
     }
 
     #[test]
+    fn worm_snapshot_is_deterministic() {
+        let cfg = cfg();
+        let dt = 1.0 / cfg.fps as f32;
+        let mut a = Sim::new(Being::Worm, &cfg, 40, 12);
+        let first = snapshot(&mut a, &cfg, Being::Worm, ColorMode::TrueColor, dt);
+        let mut b = Sim::new(Being::Worm, &cfg, 40, 12);
+        let second = snapshot(&mut b, &cfg, Being::Worm, ColorMode::TrueColor, dt);
+        assert_eq!(first, second);
+
+        let text = String::from_utf8(first).expect("ascii output");
+        assert_eq!(text.split("\r\n").count() - 1, 12);
+        assert!(text.contains("38;2;"));
+    }
+
+    #[test]
     fn record_writes_asciicast_v2() {
         let cfg = cfg();
         let dt = 1.0 / cfg.fps as f32;
@@ -161,6 +176,42 @@ mod tests {
             &mut sim,
             &cfg,
             Being::Orb,
+            ColorMode::TrueColor,
+            dt,
+            &mut out,
+        )
+        .expect("record");
+
+        let text = String::from_utf8(out).expect("utf8");
+        let mut lines = text.lines();
+        let header = lines.next().expect("header");
+        assert!(header.contains("\"version\":2"));
+        assert!(header.contains("\"width\":40"));
+        assert!(header.contains("\"height\":12"));
+        assert!(header.contains("COLORTERM"));
+
+        assert!(text.contains("\\u001b[?25l"));
+
+        let events: Vec<&str> = lines.collect();
+        assert!(!events.is_empty());
+        assert!(events.len() <= 11);
+        for event in events {
+            assert!(event.starts_with('['));
+            assert!(event.contains(",\"o\",\""));
+            assert!(event.ends_with("\"]"));
+        }
+    }
+
+    #[test]
+    fn worm_record_writes_asciicast_v2() {
+        let cfg = cfg();
+        let dt = 1.0 / cfg.fps as f32;
+        let mut sim = Sim::new(Being::Worm, &cfg, 40, 12);
+        let mut out = Vec::new();
+        record(
+            &mut sim,
+            &cfg,
+            Being::Worm,
             ColorMode::TrueColor,
             dt,
             &mut out,
