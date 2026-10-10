@@ -7,11 +7,8 @@ pub enum Tone {
     Flesh,
     Groove,
     Gore,
-    #[allow(dead_code)]
     WormDark,
-    #[allow(dead_code)]
     WormMid,
-    #[allow(dead_code)]
     WormHot,
 }
 

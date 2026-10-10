@@ -1,12 +1,14 @@
 use crate::args::Config;
 use crate::carrion::Carrion;
 use crate::scene::Grid;
+use crate::worm::Worm;
 use crate::App;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Being {
     Orb,
     Carrion,
+    Worm,
 }
 
 impl Being {
@@ -14,6 +16,7 @@ impl Being {
         match self {
             Being::Orb => "orb",
             Being::Carrion => "carrion",
+            Being::Worm => "worm",
         }
     }
 
@@ -21,6 +24,7 @@ impl Being {
         match self {
             Being::Orb => &["orb"],
             Being::Carrion => &["carrion"],
+            Being::Worm => &["worm"],
         }
     }
 
@@ -28,6 +32,7 @@ impl Being {
         match self {
             Being::Orb => "Blue wireframe orb",
             Being::Carrion => "Red flesh creature with dark brain folds",
+            Being::Worm => "Red ASCII worm curled in the dark",
         }
     }
 
@@ -40,14 +45,15 @@ impl Being {
         })
     }
 
-    pub fn all() -> [Self; 2] {
-        [Being::Orb, Being::Carrion]
+    pub fn all() -> [Self; 3] {
+        [Being::Orb, Being::Carrion, Being::Worm]
     }
 }
 
 pub enum Sim {
     Orb(Box<App>),
     Carrion(Box<Carrion>),
+    Worm(Box<Worm>),
 }
 
 impl Sim {
@@ -55,6 +61,7 @@ impl Sim {
         match being {
             Being::Orb => Sim::Orb(Box::new(App::new(cfg, w, h))),
             Being::Carrion => Sim::Carrion(Box::new(Carrion::new(cfg, w, h))),
+            Being::Worm => Sim::Worm(Box::new(Worm::new(cfg, w, h))),
         }
     }
 
@@ -62,6 +69,7 @@ impl Sim {
         match self {
             Sim::Orb(app) => app.update(dt, w, h),
             Sim::Carrion(carrion) => carrion.update(dt, w, h),
+            Sim::Worm(worm) => worm.update(dt, w, h),
         }
     }
 
@@ -69,6 +77,7 @@ impl Sim {
         match self {
             Sim::Orb(app) => app.resize(w, h),
             Sim::Carrion(carrion) => carrion.resize(w, h),
+            Sim::Worm(worm) => worm.resize(w, h),
         }
     }
 
@@ -76,6 +85,7 @@ impl Sim {
         match self {
             Sim::Orb(app) => app.show_too_small(w, h),
             Sim::Carrion(carrion) => carrion.show_too_small(w, h),
+            Sim::Worm(worm) => worm.show_too_small(w, h),
         }
     }
 
@@ -83,6 +93,7 @@ impl Sim {
         match self {
             Sim::Orb(app) => app.toggle_hud(),
             Sim::Carrion(carrion) => carrion.toggle_detail(),
+            Sim::Worm(worm) => worm.toggle_detail(),
         }
     }
 
@@ -90,6 +101,7 @@ impl Sim {
         match self {
             Sim::Orb(app) => app.paused = !app.paused,
             Sim::Carrion(carrion) => carrion.toggle_pause(),
+            Sim::Worm(worm) => worm.toggle_pause(),
         }
     }
 
@@ -97,6 +109,7 @@ impl Sim {
         match self {
             Sim::Orb(app) => app.paused,
             Sim::Carrion(carrion) => carrion.paused(),
+            Sim::Worm(worm) => worm.paused(),
         }
     }
 
@@ -104,6 +117,7 @@ impl Sim {
         match self {
             Sim::Orb(app) => app.adjust_speed(ratio),
             Sim::Carrion(carrion) => carrion.adjust_speed(ratio),
+            Sim::Worm(worm) => worm.adjust_speed(ratio),
         }
     }
 
@@ -111,6 +125,7 @@ impl Sim {
         match self {
             Sim::Orb(app) => &app.grid,
             Sim::Carrion(carrion) => carrion.grid(),
+            Sim::Worm(worm) => worm.grid(),
         }
     }
 }
@@ -141,9 +156,17 @@ mod tests {
     }
 
     #[test]
+    fn sim_new_worm_builds_grid() {
+        let cfg = sim_cfg();
+        let sim = Sim::new(Being::Worm, &cfg, 30, 10);
+        assert_eq!(sim.grid().w, 30);
+        assert_eq!(sim.grid().h, 10);
+    }
+
+    #[test]
     fn identity_table_is_complete() {
         let all = Being::all();
-        assert_eq!(all, [Being::Orb, Being::Carrion]);
+        assert_eq!(all, [Being::Orb, Being::Carrion, Being::Worm]);
         for being in all {
             assert!(!being.name().is_empty());
             assert!(!being.description().is_empty());
@@ -154,6 +177,7 @@ mod tests {
     fn aliases_are_expected() {
         assert_eq!(Being::Orb.aliases(), ["orb"]);
         assert_eq!(Being::Carrion.aliases(), ["carrion"]);
+        assert_eq!(Being::Worm.aliases(), ["worm"]);
     }
 
     #[test]
@@ -161,6 +185,8 @@ mod tests {
         assert_eq!(Being::from_name("orb"), Some(Being::Orb));
         assert_eq!(Being::from_name("ORB"), Some(Being::Orb));
         assert_eq!(Being::from_name("carrion"), Some(Being::Carrion));
+        assert_eq!(Being::from_name("worm"), Some(Being::Worm));
+        assert_eq!(Being::from_name("WORM"), Some(Being::Worm));
     }
 
     #[test]

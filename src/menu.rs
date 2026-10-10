@@ -140,7 +140,7 @@ impl Params {
 #[derive(Clone, Debug, PartialEq)]
 pub struct MenuState {
     pub playlist_on: bool,
-    pub marked: [bool; 2],
+    pub marked: [bool; 3],
     pub list_index: usize,
     pub param_index: usize,
     pub focus: Focus,
@@ -152,7 +152,7 @@ impl Default for MenuState {
     fn default() -> Self {
         Self {
             playlist_on: false,
-            marked: [false, false],
+            marked: [false; 3],
             list_index: 0,
             param_index: 0,
             focus: Focus::List,
@@ -912,7 +912,7 @@ mod tests {
     fn default_state_shape() {
         let state = MenuState::default();
         assert!(!state.playlist_on);
-        assert_eq!(state.marked, [false, false]);
+        assert_eq!(state.marked, [false, false, false]);
         assert_eq!(state.list_index, 0);
         assert_eq!(state.param_index, 0);
         assert_eq!(state.focus, Focus::List);
@@ -928,7 +928,9 @@ mod tests {
         on_key(&mut state, Key::Down);
         assert_eq!(state.list_index, 2);
         on_key(&mut state, Key::Down);
-        assert_eq!(state.list_index, 2);
+        assert_eq!(state.list_index, 3);
+        on_key(&mut state, Key::Down);
+        assert_eq!(state.list_index, 3);
         assert!(state.at_start);
         assert_eq!(state.focus, Focus::Start);
     }
@@ -994,7 +996,7 @@ mod tests {
     #[test]
     fn up_from_start_returns_to_list() {
         let mut state = MenuState::default();
-        for _ in 0..3 {
+        for _ in 0..4 {
             on_key(&mut state, Key::Down);
         }
         assert!(state.at_start);
@@ -1111,9 +1113,9 @@ mod tests {
         assert!(state.playlist_on);
         on_key(&mut state, Key::Down);
         on_key(&mut state, Key::Enter);
-        assert_eq!(state.marked, [true, false]);
+        assert_eq!(state.marked, [true, false, false]);
         on_key(&mut state, Key::Enter);
-        assert_eq!(state.marked, [false, false]);
+        assert_eq!(state.marked, [false, false, false]);
     }
 
     #[test]
@@ -1126,7 +1128,7 @@ mod tests {
     #[test]
     fn enter_at_start_runs() {
         let mut state = MenuState::default();
-        for _ in 0..3 {
+        for _ in 0..4 {
             on_key(&mut state, Key::Down);
         }
         assert!(state.at_start);
@@ -1483,6 +1485,8 @@ mod tests {
         assert_eq!(hovered_being(&state, &cfg), Being::Orb);
         state.list_index = 2;
         assert_eq!(hovered_being(&state, &cfg), Being::Carrion);
+        state.list_index = 3;
+        assert_eq!(hovered_being(&state, &cfg), Being::Worm);
     }
 
     #[test]
@@ -1498,7 +1502,7 @@ mod tests {
 
         let mut marked = MenuState {
             playlist_on: true,
-            marked: [false, true],
+            marked: [false, true, false],
             ..MenuState::default()
         };
         let req = run_request(&marked, &cfg);
@@ -1506,7 +1510,7 @@ mod tests {
         assert_eq!(req.playlist, Some(vec![Being::Carrion]));
         assert_eq!(req.interval, Some(marked.params.interval));
 
-        marked.marked = [false, false];
+        marked.marked = [false, false, false];
         let req = run_request(&marked, &cfg);
         assert_eq!(req.playlist, Some(Being::all().to_vec()));
     }
@@ -1729,7 +1733,7 @@ mod render_tests {
         }
 
         let mut state = blank();
-        for _ in 0..3 {
+        for _ in 0..4 {
             on_key(&mut state, Key::Down);
         }
         assert!(state.at_start);
@@ -1753,6 +1757,7 @@ mod render_tests {
         assert_eq!(row_text(&cells, W, 1, 1, 15), "Playlist [off]");
         assert_eq!(row_text(&cells, W, 2, 1, 6), "○ orb");
         assert_eq!(row_text(&cells, W, 3, 1, 10), "○ carrion");
+        assert_eq!(row_text(&cells, W, 4, 1, 7), "○ worm");
     }
 
     #[test]
@@ -1768,20 +1773,31 @@ mod render_tests {
     #[test]
     fn marks_track_state() {
         let state = MenuState {
-            marked: [true, false],
+            marked: [true, false, false],
             ..blank()
         };
         let cells = frame(&state, None, W, H, ColorMode::TrueColor);
         assert_eq!(at(&cells, W, 1, 2).ch, '▪');
         assert_eq!(at(&cells, W, 1, 3).ch, '○');
+        assert_eq!(at(&cells, W, 1, 4).ch, '○');
 
         let flipped = MenuState {
-            marked: [false, true],
+            marked: [false, true, false],
             ..blank()
         };
         let cells = frame(&flipped, None, W, H, ColorMode::TrueColor);
         assert_eq!(at(&cells, W, 1, 2).ch, '○');
         assert_eq!(at(&cells, W, 1, 3).ch, '▪');
+        assert_eq!(at(&cells, W, 1, 4).ch, '○');
+
+        let last = MenuState {
+            marked: [false, false, true],
+            ..blank()
+        };
+        let cells = frame(&last, None, W, H, ColorMode::TrueColor);
+        assert_eq!(at(&cells, W, 1, 2).ch, '○');
+        assert_eq!(at(&cells, W, 1, 3).ch, '○');
+        assert_eq!(at(&cells, W, 1, 4).ch, '▪');
     }
 
     #[test]

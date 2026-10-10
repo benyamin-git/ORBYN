@@ -9,7 +9,6 @@ mod rng;
 mod rotation;
 mod scene;
 mod term;
-#[allow(dead_code)]
 mod worm;
 
 use std::io::{self, IsTerminal};
@@ -588,6 +587,7 @@ mod tests {
         match &fresh {
             Sim::Orb(app) => assert!((app.speed - session_speed).abs() < 1e-6),
             Sim::Carrion(_) => panic!("expected orb"),
+            Sim::Worm(_) => panic!("expected orb"),
         }
 
         swap_to(&mut sim, Being::Carrion, &c, w, h, false);

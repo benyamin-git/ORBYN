@@ -129,6 +129,8 @@ pub fn usage() -> String {
     let orb_desc = Being::Orb.description();
     let carrion_name = Being::Carrion.name();
     let carrion_desc = Being::Carrion.description();
+    let worm_name = Being::Worm.name();
+    let worm_desc = Being::Worm.description();
     format!(
         "\
 ORBYN {VERSION}
@@ -140,6 +142,7 @@ USAGE:
 MODES:
         (default)         {orb_desc}
     -{carrion_name}, --{carrion_name}   {carrion_desc}
+    -{worm_name}, --{worm_name}         {worm_desc}
         --mode <NAME>     Start directly in a named mode
 
 ROTATION:
@@ -150,7 +153,7 @@ ROTATION:
 OPTIONS:
     -s, --speed <FLOAT>   Motion speed multiplier [default: 1.0]
         --fps <N>         Frames per second, 1-240 [default: 30]
-        --size <ROWS>     Body radius in text rows [default: auto]
+        --size <ROWS>     Body size in text rows [default: auto]
         --trail <FLOAT>   Trail persistence, 0.0-0.97, higher = longer glow [default: 0.82]
         --color <MODE>    auto, truecolor, 256, 16, mono [default: auto]
         --hud <N>         Drifting telemetry fragments, 0-64 [default: 6]
@@ -176,7 +179,7 @@ MENU (bare `orbyn`):
 KEYS:
     q, Ctrl-C, Ctrl-D   quit
     space               pause
-    h                   toggle telemetry (orb) / body detail (carrion)
+    h                   toggle telemetry (orb) / body detail (carrion, worm)
     n                   swap to the next being
     +, -                speed up / slow down
 "
@@ -233,7 +236,7 @@ where
                 cfg.run = true;
                 continue;
             }
-            "-carrion" | "--carrion" => {
+            "-carrion" | "--carrion" | "-worm" | "--worm" => {
                 cfg.being = Being::from_name(name.trim_start_matches('-'));
                 continue;
             }
@@ -395,6 +398,16 @@ mod tests {
     }
 
     #[test]
+    fn worm_flag_parses_in_both_forms() {
+        assert_eq!(config(&["-worm"]).being, Some(Being::Worm));
+        assert_eq!(config(&["--worm"]).being, Some(Being::Worm));
+        let cfg = config(&["--worm", "--fps", "60", "--seed", "4"]);
+        assert_eq!(cfg.being, Some(Being::Worm));
+        assert_eq!(cfg.fps, 60);
+        assert_eq!(cfg.seed, Some(4));
+    }
+
+    #[test]
     fn help_and_version_short_circuit() {
         assert!(matches!(run(&["--help"]), Ok(Action::Help)));
         assert!(matches!(run(&["-h"]), Ok(Action::Help)));
@@ -477,6 +490,7 @@ mod tests {
     #[test]
     fn mode_flag_parses_and_rejects_unknown() {
         assert_eq!(config(&["--mode", "carrion"]).being, Some(Being::Carrion));
+        assert_eq!(config(&["--mode", "worm"]).being, Some(Being::Worm));
         assert_eq!(config(&["--mode=orb"]).being, Some(Being::Orb));
         let err = run(&["--mode", "dragon"]).unwrap_err();
         assert!(err.contains("dragon"), "error was {err}");
@@ -578,5 +592,14 @@ mod tests {
             text.contains("next being"),
             "usage missing 'n' next-being key"
         );
+    }
+
+    #[test]
+    fn usage_documents_worm_mode_and_updated_help() {
+        let text = usage();
+        assert!(text.contains(Being::Worm.name()));
+        assert!(text.contains(Being::Worm.description()));
+        assert!(text.contains("toggle telemetry (orb) / body detail (carrion, worm)"));
+        assert!(text.contains("Body size in text rows"));
     }
 }

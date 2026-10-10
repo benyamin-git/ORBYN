@@ -150,18 +150,12 @@ pub const FLESH_CH: char = '#';
 pub const GROOVE_CH: char = '=';
 pub const GORE_CH: char = '-';
 
-#[allow(dead_code)]
 pub const WORM_DARK_RED: Color = Color::Rgb(0x65, 0x10, 0x1A);
-#[allow(dead_code)]
 pub const WORM_MID_RED: Color = Color::Rgb(0xD9, 0x1F, 0x32);
-#[allow(dead_code)]
 pub const WORM_HOT_RED: Color = Color::Rgb(0xFF, 0x35, 0x48);
 
-#[allow(dead_code)]
 pub const WORM_DARK_CH: char = ':';
-#[allow(dead_code)]
 pub const WORM_MID_CH: char = '#';
-#[allow(dead_code)]
 pub const WORM_HOT_CH: char = '%';
 
 fn flesh_color(mode: ColorMode) -> Color {
@@ -206,7 +200,6 @@ fn carrion_cell(cell: &crate::scene::Cell, mode: ColorMode) -> Cell {
     Cell { ch, color }
 }
 
-#[allow(dead_code)]
 fn worm_dark_color(mode: ColorMode) -> Color {
     match mode {
         ColorMode::Mono => Color::Default,
@@ -216,7 +209,6 @@ fn worm_dark_color(mode: ColorMode) -> Color {
     }
 }
 
-#[allow(dead_code)]
 fn worm_mid_color(mode: ColorMode) -> Color {
     match mode {
         ColorMode::Mono => Color::Default,
@@ -226,7 +218,6 @@ fn worm_mid_color(mode: ColorMode) -> Color {
     }
 }
 
-#[allow(dead_code)]
 fn worm_hot_color(mode: ColorMode) -> Color {
     match mode {
         ColorMode::Mono => Color::Default,
@@ -236,7 +227,6 @@ fn worm_hot_color(mode: ColorMode) -> Color {
     }
 }
 
-#[allow(dead_code)]
 fn worm_cell(cell: &crate::scene::Cell, mode: ColorMode) -> Cell {
     if cell.v <= 0.0 && cell.tone == Tone::Blank {
         return Cell::BLANK;
@@ -277,6 +267,7 @@ pub fn cells_for(grid: &Grid, being: Being, mode: ColorMode) -> Vec<Cell> {
         .map(|cell| match being {
             Being::Orb => orb_cell(cell.v, cell.ch, mode),
             Being::Carrion => carrion_cell(cell, mode),
+            Being::Worm => worm_cell(cell, mode),
         })
         .collect()
 }
@@ -499,6 +490,7 @@ fn title(being: Being) -> &'static [u8] {
     match being {
         Being::Orb => b"\x1b]0;ORBYN\x1b\\",
         Being::Carrion => b"\x1b]0;ORBYN // CARRION\x1b\\",
+        Being::Worm => b"\x1b]0;ORBYN // WORM\x1b\\",
     }
 }
 
@@ -646,7 +638,9 @@ mod tests {
     fn title_matches_being() {
         assert_eq!(title(Being::Orb), b"\x1b]0;ORBYN\x1b\\");
         assert_eq!(title(Being::Carrion), b"\x1b]0;ORBYN // CARRION\x1b\\");
+        assert_eq!(title(Being::Worm), b"\x1b]0;ORBYN // WORM\x1b\\");
         assert_ne!(title(Being::Orb), title(Being::Carrion));
+        assert_ne!(title(Being::Worm), title(Being::Carrion));
     }
 
     #[test]
@@ -810,10 +804,14 @@ mod tests {
         grid.stamp(0, 0, 1.0);
         let orb = cells_for(&grid, Being::Orb, ColorMode::TrueColor);
         let carrion = cells_for(&grid, Being::Carrion, ColorMode::TrueColor);
+        let worm = cells_for(&grid, Being::Worm, ColorMode::TrueColor);
         assert_eq!(orb.len(), 2);
         assert_eq!(carrion.len(), 2);
+        assert_eq!(worm.len(), 2);
         assert_eq!(orb[0].ch, '@');
         assert_eq!(carrion[0].color, FLESH_RED);
+        assert_eq!(worm[0].color, WORM_MID_RED);
+        assert_ne!(worm[0].color, FLESH_RED);
     }
 
     fn lit(tone: Tone) -> crate::scene::Cell {
