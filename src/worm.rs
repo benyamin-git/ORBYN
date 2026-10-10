@@ -1079,24 +1079,89 @@ mod tests {
         nearest
     }
 
+    fn node_clearance(worm: &Worm, w: usize, h: usize, node: usize) -> f32 {
+        let wf = w.max(1) as f32;
+        let hf = h.max(1) as f32;
+        let cutoff = (LENGTH_RATIO + AVOID_MARGIN) * worm.base_t;
+        let spacing = LENGTH_RATIO * worm.base_t / SPINE_N as f32;
+        let node_arc = node as f32 * spacing;
+        let nx = worm.nodes_x[node];
+        let ny = worm.nodes_y[node];
+        let mut nearest = f32::INFINITY;
+        let mut arc = 0.0f32;
+        let mut idx = worm.trail_head;
+        for _ in 0..worm.trail_len {
+            if arc > cutoff + node_arc {
+                let dx = wrap_delta(nx - worm.trail_x[idx], wf) / ASPECT;
+                let dy = wrap_delta(ny - worm.trail_y[idx], hf);
+                let d = (dx * dx + dy * dy).sqrt();
+                if d < nearest {
+                    nearest = d;
+                }
+            }
+            arc += worm.trail_seg[idx];
+            idx = (idx + TRAIL_CAP - 1) % TRAIL_CAP;
+        }
+        nearest
+    }
+
+    fn all_node_clearance(worm: &Worm, w: usize, h: usize) -> (f32, usize) {
+        let mut nearest = f32::INFINITY;
+        let mut min_node = 0usize;
+        for i in 0..SPINE_N {
+            let d = node_clearance(worm, w, h, i);
+            if d < nearest {
+                nearest = d;
+                min_node = i;
+            }
+        }
+        (nearest, min_node)
+    }
+
     #[test]
     fn no_self_contact_without_escape() {
         let (w, h) = (900, 36);
         let dt = 1.0 / 30.0;
+        let mut bad: Vec<u64> = Vec::new();
         for seed in [5u64, 23, 41] {
             let mut worm = Worm::new(&config(seed), w, h);
-            for _ in 0..20000 {
+            let mut min_head = f32::INFINITY;
+            let mut min_node = f32::INFINITY;
+            let mut violations = 0usize;
+            let mut first: Option<(usize, usize, f32, f32, f32)> = None;
+            for frame in 0..20000 {
                 worm.step(dt, w, h);
-                let nearest = head_clearance(&worm, w, h);
-                if nearest < CONTACT * worm.base_t {
-                    assert!(
-                        worm.escaping,
-                        "seed {seed} contact at clearance {nearest} without escape"
-                    );
+                let head = head_clearance(&worm, w, h);
+                min_head = min_head.min(head);
+                let mut nearest = head;
+                let mut nearest_node = 0usize;
+                if frame % 2 == 0 {
+                    let (node, min_n) = all_node_clearance(&worm, w, h);
+                    min_node = min_node.min(node);
+                    if node < nearest {
+                        nearest = node;
+                        nearest_node = min_n;
+                    }
+                }
+                if nearest < CONTACT * worm.base_t && !worm.escaping {
+                    violations += 1;
+                    if first.is_none() {
+                        first = Some((frame, nearest_node, nearest, head, min_node));
+                    }
                 }
             }
-            eprintln!("seed {seed} escapes {}", worm.escapes);
+            eprintln!(
+                "seed {seed} escapes {} min_head {min_head} min_node {min_node} violations {violations} first {first:?}",
+                worm.escapes
+            );
+            if violations > 0 {
+                bad.push(seed);
+            }
         }
+        assert!(
+            bad.is_empty(),
+            "contacts without escape on seeds {bad:?} (see per-seed diagnostics above)"
+        );
     }
 
     #[test]
