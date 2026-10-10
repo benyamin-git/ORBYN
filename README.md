@@ -11,14 +11,14 @@ visuals: a blue wireframe orb by default, a red flesh creature selected with
 <p align="center">
   <img src="assets/orb.gif" alt="ORBYN orb drifting in a terminal" width="420">
   <img src="assets/carrion.gif" alt="ORBYN carrion creature drifting in a terminal" width="420">
-  <img src="assets/worm.gif" alt="ORBYN worm curling in a terminal" width="420">
+  <img src="assets/worm.gif" alt="ORBYN worm slithering across a terminal" width="420">
 </p>
 
 The orb bounces around the screen with fading cmatrix-style trails, organic
 energy bursts, and drifting telemetry text. `-carrion` replaces it with a red
 flesh creature that has dark grey brain folds, a fading gore trail, and a
 Crawl/Grip/Lunge motion cycle. `-worm` replaces it with a single dark-red ASCII
-worm that curls in slow traveling waves, shimmers between dark, mid, and bright
+worm that slithers in a serpentine trail, shimmers between dark, mid, and bright
 red characters, and wraps around the screen edges. Color output
 falls back automatically from truecolor to 256, 16, or mono according to the
 terminal, `COLORTERM`, `TERM`, and `NO_COLOR`.
