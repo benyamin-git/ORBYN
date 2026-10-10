@@ -21,7 +21,8 @@ const AVOID_MARGIN: f32 = 1.5;
 const CONTACT: f32 = 2.0;
 const RELEASE: f32 = 2.5;
 const ESCAPE_SEC: f32 = 5.0;
-const ESCAPE_RELEASE: f32 = 1.0 * SENSE_RADIUS;
+const ESCAPE_DEBOUNCE: f32 = 1.0;
+const ESCAPE_BOUND: f32 = 2.0;
 const AVOID_EPS: f32 = 1e-3;
 const SPAN_RATIO: f32 = 6.6;
 const BREATHE_RATE: f32 = 1.7;
@@ -63,6 +64,8 @@ pub struct Worm {
     trail_head: usize,
     blocked_time: f32,
     escaping: bool,
+    escape_dist: f64,
+    escape_debounce: f32,
     escapes: u32,
     #[cfg(test)]
     avoid: bool,
@@ -100,6 +103,8 @@ impl Worm {
             trail_head: 0,
             blocked_time: 0.0,
             escaping: false,
+            escape_dist: 0.0,
+            escape_debounce: 0.0,
             escapes: 0,
             #[cfg(test)]
             avoid: true,
@@ -242,16 +247,29 @@ impl Worm {
         let release = RELEASE * self.base_t;
         if !nearest.is_finite() || nearest > release {
             self.blocked_time = 0.0;
-        } else if !self.escaping && nearest < contact {
+        }
+        if self.escaping {
+            if nearest.is_finite() && nearest > release {
+                self.escape_debounce += dt;
+            } else {
+                self.escape_debounce = 0.0;
+            }
+            let bound = ESCAPE_BOUND * LENGTH_RATIO * self.base_t;
+            if self.escape_debounce >= ESCAPE_DEBOUNCE
+                || (self.dist - self.escape_dist) as f32 > bound
+            {
+                self.escaping = false;
+                self.blocked_time = 0.0;
+                self.escape_debounce = 0.0;
+            }
+        } else if nearest.is_finite() && nearest < contact {
             self.blocked_time += dt;
             if self.blocked_time >= ESCAPE_SEC {
                 self.escaping = true;
                 self.escapes += 1;
+                self.escape_dist = self.dist;
+                self.escape_debounce = 0.0;
             }
-        }
-        if self.escaping && nearest > ESCAPE_RELEASE * self.base_t {
-            self.escaping = false;
-            self.blocked_time = 0.0;
         }
     }
 
@@ -267,7 +285,8 @@ impl Worm {
             self.desired_heading()
         };
         let delta = wrap_delta(target - self.heading, TAU);
-        let step = delta.clamp(-TURN_RATE * dt, TURN_RATE * dt);
+        let limit = TURN_RATE * dt.max(0.0);
+        let step = delta.clamp(-limit, limit);
         self.heading = wrap_angle(self.heading + step);
     }
 
@@ -1212,6 +1231,78 @@ mod tests {
         let cleared_at = cleared_at.expect("escaping never re-armed after the escape");
         eprintln!("escaped at {escaped_at} cleared at {cleared_at}");
         assert!(!worm.escaping, "escaping active at the end of the run");
+    }
+
+    #[test]
+    fn escape_rearms_on_normal_screens() {
+        let dt = 1.0 / 30.0;
+        let cases = [(80usize, 24usize, 5u64), (80, 24, 41), (100, 30, 5)];
+        for &(w, h, seed) in &cases {
+            let mut worm = Worm::new(&config(seed), w, h);
+            let bound = ESCAPE_BOUND * LENGTH_RATIO * worm.base_t;
+            let per_frame = base_speed(h, worm.speed) * dt;
+            let bound_frames = (bound / per_frame).ceil() as usize;
+            let max_stretch = bound_frames + bound_frames / 5 + 5;
+            let mut fires: Vec<usize> = Vec::new();
+            let mut clears: Vec<usize> = Vec::new();
+            let mut was_escaping = worm.escaping;
+            let mut stretch = 0usize;
+            let mut max_seen = 0usize;
+            for frame in 0..6000 {
+                worm.update(dt, w, h);
+                if worm.escaping {
+                    stretch += 1;
+                    max_seen = max_seen.max(stretch);
+                    if !was_escaping {
+                        fires.push(frame);
+                    }
+                } else {
+                    if was_escaping {
+                        clears.push(frame);
+                    }
+                    stretch = 0;
+                }
+                was_escaping = worm.escaping;
+            }
+            let mut drained = 0usize;
+            while worm.escaping && drained < max_stretch {
+                worm.update(dt, w, h);
+                if worm.escaping {
+                    stretch += 1;
+                    max_seen = max_seen.max(stretch);
+                } else {
+                    clears.push(6000 + drained);
+                    stretch = 0;
+                }
+                drained += 1;
+            }
+            eprintln!(
+                "escape_rearms {w}x{h} seed {seed}: fires {fires:?} clears {clears:?} max_stretch {max_seen}/{max_stretch} drained {drained} escapes {}",
+                worm.escapes
+            );
+            assert!(worm.escapes >= 1, "{w}x{h} seed {seed}: valve never fired");
+            assert_eq!(
+                clears.len(),
+                fires.len(),
+                "{w}x{h} seed {seed}: an escape period never ended"
+            );
+            assert!(
+                !worm.escaping,
+                "{w}x{h} seed {seed}: escaping latched to the end"
+            );
+            assert!(
+                max_seen <= max_stretch,
+                "{w}x{h} seed {seed}: escaping stretch {max_seen} frames exceeds {max_stretch}"
+            );
+            for i in 0..SPINE_N {
+                assert!(worm.nodes_x[i].is_finite() && worm.nodes_y[i].is_finite());
+            }
+            let lit = lit_count(&worm);
+            assert!(
+                lit > 60,
+                "{w}x{h} seed {seed}: body collapsed to {lit} cells"
+            );
+        }
     }
 
     #[test]
