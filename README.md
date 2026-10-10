@@ -125,8 +125,6 @@ cargo install --git https://github.com/asciinema/agg
 scripts/samples.sh
 ```
 
-The checked-in GIFs were not regenerated while writing this README.
-
 ## License
 
 [DO WHATEVER YOU WANT LICENSE](LICENSE).
