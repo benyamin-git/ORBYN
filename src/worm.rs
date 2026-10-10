@@ -849,10 +849,10 @@ mod tests {
         assert!(changes >= 2, "weave residual sign changes {changes}");
     }
 
-    fn residual_extrema_distances(speed: f32) -> Vec<f32> {
+    fn residual_extrema_distances(speed: f32, avoid: bool) -> (Vec<f32>, f32) {
         let (w, h) = (80, 24);
         let mut worm = Worm::new(&config(41), w, h);
-        worm.avoid = false;
+        worm.avoid = avoid;
         worm.adjust_speed(speed);
         let dt = 1.0 / 30.0;
         let window = (30.0 / dt) as usize;
@@ -896,13 +896,14 @@ mod tests {
                 dir = d;
             }
         }
-        extrema
+        let expected = 0.5 * WEAVE_LEN * LENGTH_RATIO * worm.base_t;
+        (extrema, expected)
     }
 
     #[test]
     fn weave_wavelength_is_speed_invariant() {
-        let slow = residual_extrema_distances(1.0);
-        let fast = residual_extrema_distances(2.0);
+        let (slow, expected) = residual_extrema_distances(1.0, false);
+        let (fast, _) = residual_extrema_distances(2.0, false);
         assert!(slow.len() >= 4, "too few slow extrema: {}", slow.len());
         assert!(fast.len() >= 4, "too few fast extrema: {}", fast.len());
         let mean_gap = |v: &[f32]| {
@@ -911,6 +912,20 @@ mod tests {
         };
         let ms = mean_gap(&slow);
         let mf = mean_gap(&fast);
+        let band = 0.3 * expected;
+        eprintln!(
+            "weave half-wavelength expected {expected} slow {ms} fast {mf} (slow n {}, fast n {})",
+            slow.len(),
+            fast.len()
+        );
+        assert!(
+            (ms - expected).abs() <= band,
+            "slow half-wavelength {ms} outside {expected} +/- {band}"
+        );
+        assert!(
+            (mf - expected).abs() <= band,
+            "fast half-wavelength {mf} outside {expected} +/- {band}"
+        );
         let ratio = mf / ms;
         assert!(
             (0.7..=1.3).contains(&ratio),
@@ -1027,6 +1042,53 @@ mod tests {
         for i in 0..SPINE_N {
             assert!(worm.nodes_x[i].is_finite() && worm.nodes_y[i].is_finite());
             assert!(worm.nodes_x[i] <= 24.0 && worm.nodes_y[i] <= 8.0);
+        }
+    }
+
+    #[test]
+    fn place_nodes_extrapolates_after_trail_clear() {
+        let (w, h) = (80, 24);
+        let mut worm = Worm::new(&config(7), w, h);
+        worm.trail_len = 0;
+        worm.trail_head = 0;
+        worm.update(1.0 / 30.0, w, h);
+        let spacing = LENGTH_RATIO * worm.base_t / SPINE_N as f32;
+        for i in 1..SPINE_N {
+            let back = spacing * i as f32;
+            let ex = (worm.nodes_x[0] - worm.heading.cos() * ASPECT * back).rem_euclid(w as f32);
+            let ey = (worm.nodes_y[0] - worm.heading.sin() * back).rem_euclid(h as f32);
+            let dx = wrap_delta(worm.nodes_x[i] - ex, w as f32);
+            let dy = wrap_delta(worm.nodes_y[i] - ey, h as f32);
+            assert!(
+                dx.abs() < 1e-3 && dy.abs() < 1e-3,
+                "node {i} off the straight extension by ({dx}, {dy})"
+            );
+        }
+    }
+
+    #[test]
+    fn mid_run_resizes_keep_body_drawn() {
+        let sizes = [(80usize, 24usize), (140, 44), (60, 18), (100, 30), (72, 22)];
+        let (mut w, mut h) = sizes[0];
+        let mut worm = Worm::new(&config(9), w, h);
+        let mut si = 0usize;
+        for frame in 0..1500 {
+            if frame % 150 == 0 {
+                (w, h) = sizes[si];
+                si = (si + 1) % sizes.len();
+                worm.resize(w, h);
+            }
+            worm.update(1.0 / 30.0, w, h);
+            for i in 0..SPINE_N {
+                assert!(worm.nodes_x[i].is_finite() && worm.nodes_y[i].is_finite());
+                assert!((0.0..=w as f32).contains(&worm.nodes_x[i]));
+                assert!((0.0..=h as f32).contains(&worm.nodes_y[i]));
+            }
+            let lit = lit_count(&worm);
+            assert!(
+                lit > 60,
+                "frame {frame} at {w}x{h}: body collapsed to {lit} cells"
+            );
         }
     }
 
@@ -1154,13 +1216,11 @@ mod tests {
                 min_head = min_head.min(head);
                 let mut nearest = head;
                 let mut nearest_node = 0usize;
-                if frame % 2 == 0 {
-                    let (node, min_n) = all_node_clearance(&worm, w, h);
-                    min_node = min_node.min(node);
-                    if node < nearest {
-                        nearest = node;
-                        nearest_node = min_n;
-                    }
+                let (node, min_n) = all_node_clearance(&worm, w, h);
+                min_node = min_node.min(node);
+                if node < nearest {
+                    nearest = node;
+                    nearest_node = min_n;
                 }
                 if nearest < CONTACT * worm.base_t && !worm.escaping {
                     violations += 1;
