@@ -1,6 +1,7 @@
 # ORBYN Worm Motion Rework — Design Spec
 
-**Status:** Approved (final, 2026-10-10)
+**Status:** Approved (final, 2026-10-10); addendum applied and approved after
+visual pass (2026-10-14)
 **Date:** 2026-10-10
 **Supersedes by reference:** `docs/superpowers/specs/2026-10-10-orbyn-worm-design.md`
 success criterion 4 and decisions D9/D11 there (spine model and base pose motion);
@@ -161,6 +162,36 @@ structure (GIF regenerated through it), version.
   gate → GIF regeneration + README wording → user visual review → merge
   decision (user).
 - No external dependencies. `agg` remains the local GIF tool.
+
+## Addendum — 2026-10-14 (visual-pass retune)
+
+The first visible build still read too calm (near-straight drift, few curves)
+and it raveled through itself on real screens. Diagnostics found the cause in
+the D8/D9 model itself: avoidance sensed trail points *older than the body arc*
+— i.e. it was blind to the body it was about to hit and instead sensed
+invisible history. On real screens that history sat permanently inside the
+sense radius, so "no clearance" never ended, the escape valve fired roughly
+every 36 s, and every valve firing was a visible self-crossing. Tuning within
+the model could not fix it; the addendum replaces the sensing model and halves
+the default size at the user's request ("half the current size on both length
+and thickness... relative thickness to length should stay the same"), then
+re-tunes feel under D15. The user approved the result in visual review
+(2026-10-14) and chose merge + v0.3.0 release.
+
+| # | Decision | Rationale | Status | Source |
+| --- | --- | --- | --- | --- |
+| A1 | Avoidance senses body nodes directly (nodes 6..24, `NECK_NODES = 6`), not trail older than the body; the head probes candidate headings over `AVOID_AHEAD = 8` thicknesses and steers toward a clearance-maximizing option (`AVOID_SAFE = 3.5`, `AVOID_STEPS = 24`, `AVOID_HOLD = 1.0` s commitment) | Supersedes D9: a follow-the-leader worm's own body *is* the obstacle set; sensing phantom old trail caused permanent pockets → valve crossings. Body-node sensing + probe steering measured zero crossings in all covered runs | decided | visual pass |
+| A2 | Auto thickness halves: `auto = h × 0.0675` (was `h × 0.135`); `LENGTH_RATIO = 10` retained, so relative thickness to length is unchanged; `fit_thickness` additionally clamps the straight spawn to the screen (`(h−2)/10`, `((w−2)/ASPECT)/10`) so tiny screens cannot start self-overlapping | Supersedes old-spec D10 ("~70–80% of terminal height") and motion criterion 6's "size rules unchanged": a straight body is now ≈68% of height but only ≈40% of an 80-col width, matching the user's halving request | decided | user |
+| A3 | Feel constants re-tuned under D15: `TURN_RATE 0.15 → 0.4`, `WEAVE_AMP 0.30 → 0.45`, `WEAVE_LEN 1.25 → 1.1`, `WANDER_AMP 1.4 → 1.0`, `WANDER_LEN 3.0 → 2.0` | First build read as straight drift; curves/economy of loops now visible while staying tranquil | decided | user |
+| A4 | Escape valve retained as a dormant last resort (state machine unchanged), no longer the expected crossing path | With A1 the valve never fires in the covered runs (80×24 ×3 seeds, 60×18, 100×30, 30×10 ×2 seeds; 12k frames each). Criterion 3's "valve is the only legal crossing path" becomes "crossings do not occur in practice; the valve remains the fail-safe" | decided | user |
+| A5 | Supersedes motion criterion 3's sensing wording: clearance is guaranteed by probe-based steering at an 8-thickness lookahead; contact threshold stays `CONTACT = 2.0` thicknesses, release `RELEASE = 2.5`, escape `ESCAPE_SEC = 5.0` | The 4–6-thickness radius clause described the removed model | decided | user |
+| A6 | Behavior tests updated: `no_self_contact_without_escape` now uses a non-adjacent body-node gap oracle (index pairs ≥ 8 apart) on 7 realistic/cramped cases; new `worm_unwinds_when_coiled_on_itself` (coiled spawn must unwind without the valve); `escape_valve_fires_when_blocked_and_rearms` unit-tests the valve lifecycle directly; `default_size_is_half_of_previous`, `worm_turns_fast_enough_to_curve_visibly`, and the phantom-seam test updated. The emergent boxed/cramped valve tests were removed — with A1 they can no longer fire | Criterion 5 preserved in spirit: emergent zero-contact runs plus a white-box valve fallback test | decided | user |
+| A7 | `assets/worm.gif` regenerated at sample size 6 (showcase ≈3× default, mirroring the old sample-to-default ratio); orb/carrion GIFs restored if regeneration rewrites them | Criterion 7; old sample size 12 would be ~6× the new default and misleading | decided | user |
+| A8 | Spec, plan, and README remain on `worm-mode`; merge to `main` and tag `v0.3.0` as the repo's first release after the user's visual approval | D16 extended: the release is the merge | decided | user |
+
+Unchanged by this addendum: success criteria 1, 2, 4 (determinism, glide
+speed, wrap), palette/glyph/detail/integration non-goals, trail buffer and
+follow-the-leader architecture, `SPINE_N = 24`.
 
 ## Open questions
 

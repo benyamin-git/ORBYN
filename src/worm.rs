@@ -10,20 +10,22 @@ const LENGTH_RATIO: f32 = 10.0;
 const FRINGE_MARGIN: f32 = 1.0;
 const TRAIL_CAP: usize = 512;
 const TRAIL_STEP: f32 = 0.2;
-const WEAVE_AMP: f32 = 0.30;
-const WEAVE_LEN: f32 = 1.25;
-const WANDER_AMP: f32 = 1.4;
-const WANDER_LEN: f32 = 3.0;
-const TURN_RATE: f32 = 0.15;
+const WEAVE_AMP: f32 = 0.45;
+const WEAVE_LEN: f32 = 1.1;
+const WANDER_AMP: f32 = 1.0;
+const WANDER_LEN: f32 = 2.0;
+const TURN_RATE: f32 = 0.4;
 const LOOKAHEAD: f32 = 1.5;
-const SENSE_RADIUS: f32 = 5.0;
-const AVOID_MARGIN: f32 = 1.5;
+const AVOID_AHEAD: f32 = 8.0;
+const AVOID_SAFE: f32 = 3.5;
+const AVOID_HOLD: f32 = 1.0;
+const AVOID_STEPS: usize = 24;
+const NECK_NODES: usize = 6;
 const CONTACT: f32 = 2.0;
 const RELEASE: f32 = 2.5;
 const ESCAPE_SEC: f32 = 5.0;
 const ESCAPE_DEBOUNCE: f32 = 1.0;
 const ESCAPE_BOUND: f32 = 2.0;
-const AVOID_EPS: f32 = 1e-3;
 const SPAN_RATIO: f32 = 6.6;
 const BREATHE_RATE: f32 = 1.7;
 const TONE_SCALE: (f32, f32) = (0.32, 0.20);
@@ -64,6 +66,8 @@ pub struct Worm {
     trail_head: usize,
     blocked_time: f32,
     escaping: bool,
+    avoid_dir: f32,
+    avoid_hold: f32,
     escape_dist: f64,
     escape_debounce: f32,
     escapes: u32,
@@ -103,6 +107,8 @@ impl Worm {
             trail_head: 0,
             blocked_time: 0.0,
             escaping: false,
+            avoid_dir: 0.0,
+            avoid_hold: 0.0,
             escape_dist: 0.0,
             escape_debounce: 0.0,
             escapes: 0,
@@ -130,9 +136,9 @@ impl Worm {
         let base = base_speed(h, self.speed);
         self.dist += (base * dt) as f64;
         let (look_x, look_y) = self.lookahead(w, h);
-        let (rx, ry, nearest) = self.sense(w, h, look_x, look_y);
+        let nearest = self.sense(w, h, look_x, look_y);
         self.update_conflict(dt, nearest);
-        self.advance_heading(dt, (rx, ry));
+        self.advance_heading(dt, w, h);
         let wf = w.max(1) as f32;
         let hf = h.max(1) as f32;
         let head_x = self.nodes_x[0] + self.heading.cos() * base * ASPECT * dt;
@@ -213,33 +219,81 @@ impl Worm {
         (x, y)
     }
 
-    fn sense(&self, w: usize, h: usize, look_x: f32, look_y: f32) -> (f32, f32, f32) {
+    fn sense(&self, w: usize, h: usize, look_x: f32, look_y: f32) -> f32 {
         let wf = w.max(1) as f32;
         let hf = h.max(1) as f32;
-        let cutoff = (LENGTH_RATIO + AVOID_MARGIN) * self.base_t;
-        let radius = SENSE_RADIUS * self.base_t;
-        let mut rx = 0.0f32;
-        let mut ry = 0.0f32;
         let mut nearest = f32::INFINITY;
-        let mut arc = 0.0f32;
-        let mut idx = self.trail_head;
-        for _ in 0..self.trail_len {
-            if arc > cutoff {
-                let dx = wrap_delta(look_x - self.trail_x[idx], wf) / ASPECT;
-                let dy = wrap_delta(look_y - self.trail_y[idx], hf);
+        for j in NECK_NODES..SPINE_N {
+            let dx = wrap_delta(look_x - self.nodes_x[j], wf) / ASPECT;
+            let dy = wrap_delta(look_y - self.nodes_y[j], hf);
+            let d = (dx * dx + dy * dy).sqrt();
+            nearest = nearest.min(d);
+        }
+        nearest
+    }
+
+    fn probe_metrics(&self, w: usize, h: usize, px: f32, py: f32, heading: f32) -> (f32, f32) {
+        let wf = w.max(1) as f32;
+        let hf = h.max(1) as f32;
+        let ahead = AVOID_AHEAD * self.base_t;
+        let dir_x = heading.cos() * ASPECT;
+        let dir_y = heading.sin();
+        let probes = 4usize;
+        let mut min_d = f32::INFINITY;
+        let mut end_d = f32::INFINITY;
+        for j in NECK_NODES..SPINE_N {
+            let tx = self.nodes_x[j];
+            let ty = self.nodes_y[j];
+            for k in 1..=probes {
+                let s = ahead * k as f32 / probes as f32;
+                let qx = (px + dir_x * s).rem_euclid(wf);
+                let qy = (py + dir_y * s).rem_euclid(hf);
+                let dx = wrap_delta(qx - tx, wf) / ASPECT;
+                let dy = wrap_delta(qy - ty, hf);
                 let d = (dx * dx + dy * dy).sqrt();
-                nearest = nearest.min(d);
-                if d < radius && d > 1e-6 {
-                    let weight = 1.0 - d / radius;
-                    let weight = weight * weight / d;
-                    rx += dx * weight;
-                    ry += dy * weight;
+                min_d = min_d.min(d);
+                if k == probes {
+                    end_d = end_d.min(d);
                 }
             }
-            arc += self.trail_seg[idx];
-            idx = (idx + TRAIL_CAP - 1) % TRAIL_CAP;
         }
-        (rx, ry, nearest)
+        (min_d, end_d)
+    }
+
+    fn avoid_target(&self, w: usize, h: usize) -> Option<f32> {
+        let hx = self.nodes_x[0];
+        let hy = self.nodes_y[0];
+        let desired = self.desired_heading();
+        let safe = AVOID_SAFE * self.base_t;
+        let contact = CONTACT * self.base_t;
+        if self.probe_metrics(w, h, hx, hy, desired).0 >= safe {
+            return None;
+        }
+        let align_cost = 0.5 * self.base_t;
+        let mut best_safe: Option<(f32, f32)> = None;
+        let mut best_clear: Option<(f32, f32)> = None;
+        let mut best_end: Option<(f32, f32)> = None;
+        for k in 0..=AVOID_STEPS {
+            let off = PI * (2.0 * k as f32 / AVOID_STEPS as f32 - 1.0);
+            let theta = wrap_angle(self.heading + off);
+            let (min_d, end_d) = self.probe_metrics(w, h, hx, hy, theta);
+            let align = wrap_delta(theta - desired, TAU).abs();
+            let score = min_d.min(2.0 * safe) - align_cost * align;
+            if min_d >= safe && best_safe.map_or(true, |(s, _)| score > s) {
+                best_safe = Some((score, theta));
+            }
+            if min_d >= contact && best_clear.map_or(true, |(s, _)| score > s) {
+                best_clear = Some((score, theta));
+            }
+            if best_end.map_or(true, |(e, _)| end_d > e) {
+                best_end = Some((end_d, theta));
+            }
+        }
+        let target = best_safe
+            .or(best_clear)
+            .map(|(_, theta)| theta)
+            .or_else(|| best_end.map(|(_, theta)| theta));
+        Some(target.unwrap())
     }
 
     fn update_conflict(&mut self, dt: f32, nearest: f32) {
@@ -273,17 +327,33 @@ impl Worm {
         }
     }
 
-    fn advance_heading(&mut self, dt: f32, repulsion: (f32, f32)) {
-        let (rx, ry) = repulsion;
+    fn advance_heading(&mut self, dt: f32, w: usize, h: usize) {
         #[cfg(test)]
         let avoiding = self.avoid && !self.escaping;
         #[cfg(not(test))]
         let avoiding = !self.escaping;
-        let target = if avoiding && rx * rx + ry * ry > AVOID_EPS * AVOID_EPS {
-            ry.atan2(rx)
+        let safe = AVOID_SAFE * self.base_t;
+        let mut target = self.desired_heading();
+        if avoiding {
+            let hx = self.nodes_x[0];
+            let hy = self.nodes_y[0];
+            if self.probe_metrics(w, h, hx, hy, target).0 < safe {
+                self.avoid_hold -= dt.max(0.0);
+                let held_ok = self.avoid_hold > 0.0
+                    && self.probe_metrics(w, h, hx, hy, self.avoid_dir).0 >= safe;
+                if held_ok {
+                    target = self.avoid_dir;
+                } else if let Some(theta) = self.avoid_target(w, h) {
+                    self.avoid_dir = theta;
+                    self.avoid_hold = AVOID_HOLD;
+                    target = theta;
+                }
+            } else {
+                self.avoid_hold = 0.0;
+            }
         } else {
-            self.desired_heading()
-        };
+            self.avoid_hold = 0.0;
+        }
         let delta = wrap_delta(target - self.heading, TAU);
         let limit = TURN_RATE * dt.max(0.0);
         let step = delta.clamp(-limit, limit);
@@ -606,13 +676,19 @@ fn body_field(
 }
 
 fn auto_thickness(h: usize) -> f32 {
-    (h as f32 * 0.135).max(1.5)
+    (h as f32 * 0.0675).max(1.5)
 }
 
 fn fit_thickness(t: f32, w: usize, h: usize) -> f32 {
     let by_height = (h as f32 - 2.0).max(1.0) / SPAN_RATIO;
     let by_width = ((w as f32 - 2.0).max(1.0) / ASPECT) / SPAN_RATIO;
-    t.min(by_height).min(by_width).max(0.5)
+    let spawn_h = (h as f32 - 2.0).max(1.0) / LENGTH_RATIO;
+    let spawn_w = ((w as f32 - 2.0).max(1.0) / ASPECT) / LENGTH_RATIO;
+    t.min(by_height)
+        .min(by_width)
+        .min(spawn_h)
+        .min(spawn_w)
+        .max(0.5)
 }
 
 fn base_speed(h: usize, multiplier: f32) -> f32 {
@@ -956,6 +1032,24 @@ mod tests {
     }
 
     #[test]
+    fn worm_turns_fast_enough_to_curve_visibly() {
+        let (w, h) = (80, 24);
+        let mut worm = Worm::new(&config(53), w, h);
+        let dt = 1.0 / 30.0;
+        let mut max_rate = 0.0f32;
+        for _ in 0..6000 {
+            let before = worm.heading;
+            worm.step(dt, w, h);
+            let rate = wrap_delta(worm.heading - before, TAU).abs() / dt;
+            max_rate = max_rate.max(rate);
+        }
+        assert!(
+            max_rate >= 0.3,
+            "max observed turn rate {max_rate} rad/s is too gentle to curve visibly"
+        );
+    }
+
+    #[test]
     fn head_wraps_across_left_edge() {
         let (w, h) = (80, 24);
         let mut worm = Worm::new(&config(13), w, h);
@@ -1007,12 +1101,12 @@ mod tests {
         let (w, h) = (80, 24);
         let mut worm = Worm::new(&config(5), w, h);
         worm.heading = PI;
-        worm.nodes_x[0] = 40.0;
+        worm.nodes_x[0] = 70.0;
         worm.nodes_y[0] = 12.0;
         worm.snap();
         worm.render(w, h);
         assert_eq!(worm.grid.data[12 * w + 30].tone, Tone::Blank);
-        assert_ne!(worm.grid.data[12 * w + 22].tone, Tone::Blank);
+        assert_ne!(worm.grid.data[12 * w + 10].tone, Tone::Blank);
     }
 
     #[test]
@@ -1136,122 +1230,74 @@ mod tests {
         assert_eq!(a.escaping, b.escaping);
     }
 
-    fn head_clearance(worm: &Worm, w: usize, h: usize) -> f32 {
+    fn min_body_gap(worm: &Worm, w: usize, h: usize) -> (f32, usize, usize) {
         let wf = w.max(1) as f32;
         let hf = h.max(1) as f32;
-        let cutoff = (LENGTH_RATIO + AVOID_MARGIN) * worm.base_t;
-        let head_x = worm.nodes_x[0];
-        let head_y = worm.nodes_y[0];
-        let mut nearest = f32::INFINITY;
-        let mut arc = 0.0f32;
-        let mut idx = worm.trail_head;
-        for _ in 0..worm.trail_len {
-            if arc > cutoff {
-                let dx = wrap_delta(head_x - worm.trail_x[idx], wf) / ASPECT;
-                let dy = wrap_delta(head_y - worm.trail_y[idx], hf);
-                let d = (dx * dx + dy * dy).sqrt();
-                if d < nearest {
-                    nearest = d;
-                }
-            }
-            arc += worm.trail_seg[idx];
-            idx = (idx + TRAIL_CAP - 1) % TRAIL_CAP;
-        }
-        nearest
-    }
-
-    fn node_clearance(worm: &Worm, w: usize, h: usize, node: usize) -> f32 {
-        let wf = w.max(1) as f32;
-        let hf = h.max(1) as f32;
-        let cutoff = (LENGTH_RATIO + AVOID_MARGIN) * worm.base_t;
-        let spacing = LENGTH_RATIO * worm.base_t / SPINE_N as f32;
-        let node_arc = node as f32 * spacing;
-        let nx = worm.nodes_x[node];
-        let ny = worm.nodes_y[node];
-        let mut nearest = f32::INFINITY;
-        let mut arc = 0.0f32;
-        let mut idx = worm.trail_head;
-        for _ in 0..worm.trail_len {
-            if arc > cutoff + node_arc {
-                let dx = wrap_delta(nx - worm.trail_x[idx], wf) / ASPECT;
-                let dy = wrap_delta(ny - worm.trail_y[idx], hf);
-                let d = (dx * dx + dy * dy).sqrt();
-                if d < nearest {
-                    nearest = d;
-                }
-            }
-            arc += worm.trail_seg[idx];
-            idx = (idx + TRAIL_CAP - 1) % TRAIL_CAP;
-        }
-        nearest
-    }
-
-    fn all_node_clearance(worm: &Worm, w: usize, h: usize) -> (f32, usize) {
-        let mut nearest = f32::INFINITY;
-        let mut min_node = 0usize;
+        let mut best = f32::INFINITY;
+        let mut pair = (0usize, 0usize);
         for i in 0..SPINE_N {
-            let d = node_clearance(worm, w, h, i);
-            if d < nearest {
-                nearest = d;
-                min_node = i;
+            for j in (i + 8)..SPINE_N {
+                let dx = wrap_delta(worm.nodes_x[i] - worm.nodes_x[j], wf) / ASPECT;
+                let dy = wrap_delta(worm.nodes_y[i] - worm.nodes_y[j], hf);
+                let d = (dx * dx + dy * dy).sqrt();
+                if d < best {
+                    best = d;
+                    pair = (i, j);
+                }
             }
         }
-        (nearest, min_node)
+        (best, pair.0, pair.1)
     }
 
     #[test]
     fn no_self_contact_without_escape() {
-        let (w, h) = (900, 36);
         let dt = 1.0 / 30.0;
-        let mut bad: Vec<u64> = Vec::new();
-        for seed in [5u64, 23, 41] {
+        let cases = [
+            (80usize, 24usize, 5u64),
+            (80, 24, 23),
+            (80, 24, 41),
+            (60, 18, 5),
+            (100, 30, 41),
+            (30, 10, 5),
+            (30, 10, 41),
+        ];
+        for &(w, h, seed) in &cases {
             let mut worm = Worm::new(&config(seed), w, h);
-            let mut min_head = f32::INFINITY;
-            let mut min_node = f32::INFINITY;
             let mut violations = 0usize;
-            let mut first: Option<(usize, usize, f32, f32, f32)> = None;
-            for frame in 0..20000 {
+            let mut first: Option<(usize, f32, usize, usize)> = None;
+            for frame in 0..12000 {
                 worm.step(dt, w, h);
-                let head = head_clearance(&worm, w, h);
-                min_head = min_head.min(head);
-                let mut nearest = head;
-                let mut nearest_node = 0usize;
-                let (node, min_n) = all_node_clearance(&worm, w, h);
-                min_node = min_node.min(node);
-                if node < nearest {
-                    nearest = node;
-                    nearest_node = min_n;
+                if worm.escaping {
+                    continue;
                 }
-                if nearest < CONTACT * worm.base_t && !worm.escaping {
+                let (gap, i, j) = min_body_gap(&worm, w, h);
+                if gap < CONTACT * worm.base_t {
                     violations += 1;
                     if first.is_none() {
-                        first = Some((frame, nearest_node, nearest, head, min_node));
+                        first = Some((frame, gap, i, j));
                     }
                 }
             }
             eprintln!(
-                "seed {seed} escapes {} min_head {min_head} min_node {min_node} violations {violations} first {first:?}",
+                "{w}x{h} seed {seed}: escapes {} violations {violations} first {first:?}",
                 worm.escapes
             );
-            if violations > 0 {
-                bad.push(seed);
-            }
+            assert!(
+                violations == 0,
+                "{w}x{h} seed {seed}: {violations} body contacts outside escape (first {first:?})"
+            );
         }
-        assert!(
-            bad.is_empty(),
-            "contacts without escape on seeds {bad:?} (see per-seed diagnostics above)"
-        );
     }
 
     #[test]
-    fn escape_valve_unsticks_a_boxed_worm() {
+    fn worm_unwinds_when_coiled_on_itself() {
         let (w, h) = (900, 36);
         let dt = 1.0 / 30.0;
         let mut worm = Worm::new(&config(7), w, h);
         let t = worm.base_t;
         let cx = w as f32 * 0.5;
         let cy = h as f32 * 0.5;
-        let radius = 1.5 * t;
+        let radius = 2.0 * t;
         let step = TRAIL_STEP * t;
         let per_lap = (TAU * radius / step).ceil() as usize;
         worm.trail_len = 0;
@@ -1262,107 +1308,52 @@ mod tests {
             let y = (cy + angle.sin() * radius).rem_euclid(h as f32);
             worm.push_trail(x, y, if k == 0 { 0.0 } else { step });
         }
-        worm.nodes_x[0] = cx;
+        worm.nodes_x[0] = (cx + radius * ASPECT).rem_euclid(w as f32);
         worm.nodes_y[0] = cy;
         worm.heading = PI / 2.0;
         worm.course = 0.0;
         worm.place_nodes(w, h);
-        let mut escaped_at: Option<usize> = None;
-        let mut cleared_at: Option<usize> = None;
+        let mut min_gap = f32::INFINITY;
         let mut left_circle = false;
-        for frame in 0..1200 {
+        for _ in 0..1200 {
             worm.update(dt, w, h);
-            if escaped_at.is_none() && worm.escapes >= 1 {
-                escaped_at = Some(frame);
-            }
-            if escaped_at.is_some() && cleared_at.is_none() && !worm.escaping {
-                cleared_at = Some(frame);
-            }
+            let (gap, _, _) = min_body_gap(&worm, w, h);
+            min_gap = min_gap.min(gap);
             let dx = wrap_delta(worm.nodes_x[0] - cx, w as f32) / ASPECT;
             let dy = wrap_delta(worm.nodes_y[0] - cy, h as f32);
             left_circle |= (dx * dx + dy * dy).sqrt() > radius;
         }
-        let escaped_at = escaped_at.expect("escape valve never fired");
+        assert_eq!(worm.escapes, 0, "valve fired on an avoidable coil");
+        assert!(left_circle, "worm never unwound from the coil");
         assert!(
-            escaped_at <= 180,
-            "escape valve fired at frame {escaped_at}"
+            min_gap >= CONTACT * t,
+            "coil unwind dipped below clearance: {min_gap} < {}",
+            CONTACT * t
         );
-        assert!(left_circle, "worm never left the circle");
-        let cleared_at = cleared_at.expect("escaping never re-armed after the escape");
-        eprintln!("escaped at {escaped_at} cleared at {cleared_at}");
-        assert!(!worm.escaping, "escaping active at the end of the run");
     }
 
     #[test]
-    fn escape_rearms_on_normal_screens() {
+    fn escape_valve_fires_when_blocked_and_rearms() {
+        let (w, h) = (80, 24);
         let dt = 1.0 / 30.0;
-        let cases = [(80usize, 24usize, 5u64), (80, 24, 41), (100, 30, 5)];
-        for &(w, h, seed) in &cases {
-            let mut worm = Worm::new(&config(seed), w, h);
-            let bound = ESCAPE_BOUND * LENGTH_RATIO * worm.base_t;
-            let per_frame = base_speed(h, worm.speed) * dt;
-            let bound_frames = (bound / per_frame).ceil() as usize;
-            let max_stretch = bound_frames + bound_frames / 5 + 5;
-            let mut fires: Vec<usize> = Vec::new();
-            let mut clears: Vec<usize> = Vec::new();
-            let mut was_escaping = worm.escaping;
-            let mut stretch = 0usize;
-            let mut max_seen = 0usize;
-            for frame in 0..6000 {
-                worm.update(dt, w, h);
-                if worm.escaping {
-                    stretch += 1;
-                    max_seen = max_seen.max(stretch);
-                    if !was_escaping {
-                        fires.push(frame);
-                    }
-                } else {
-                    if was_escaping {
-                        clears.push(frame);
-                    }
-                    stretch = 0;
-                }
-                was_escaping = worm.escaping;
+        let mut worm = Worm::new(&config(7), w, h);
+        let (lx, ly) = worm.lookahead(w, h);
+        worm.nodes_x[6] = lx;
+        worm.nodes_y[6] = ly;
+        worm.blocked_time = ESCAPE_SEC - dt;
+        worm.step(dt, w, h);
+        assert!(worm.escaping, "valve did not fire after sustained contact");
+        assert_eq!(worm.escapes, 1);
+        let mut cleared = false;
+        for _ in 0..900 {
+            worm.step(dt, w, h);
+            if !worm.escaping {
+                cleared = true;
+                break;
             }
-            let mut drained = 0usize;
-            while worm.escaping && drained < max_stretch {
-                worm.update(dt, w, h);
-                if worm.escaping {
-                    stretch += 1;
-                    max_seen = max_seen.max(stretch);
-                } else {
-                    clears.push(6000 + drained);
-                    stretch = 0;
-                }
-                drained += 1;
-            }
-            eprintln!(
-                "escape_rearms {w}x{h} seed {seed}: fires {fires:?} clears {clears:?} max_stretch {max_seen}/{max_stretch} drained {drained} escapes {}",
-                worm.escapes
-            );
-            assert!(worm.escapes >= 1, "{w}x{h} seed {seed}: valve never fired");
-            assert_eq!(
-                clears.len(),
-                fires.len(),
-                "{w}x{h} seed {seed}: an escape period never ended"
-            );
-            assert!(
-                !worm.escaping,
-                "{w}x{h} seed {seed}: escaping latched to the end"
-            );
-            assert!(
-                max_seen <= max_stretch,
-                "{w}x{h} seed {seed}: escaping stretch {max_seen} frames exceeds {max_stretch}"
-            );
-            for i in 0..SPINE_N {
-                assert!(worm.nodes_x[i].is_finite() && worm.nodes_y[i].is_finite());
-            }
-            let lit = lit_count(&worm);
-            assert!(
-                lit > 60,
-                "{w}x{h} seed {seed}: body collapsed to {lit} cells"
-            );
         }
+        assert!(cleared, "escape never re-armed");
+        assert_eq!(worm.escapes, 1, "valve fired again after clearing");
     }
 
     #[test]
@@ -1669,6 +1660,22 @@ mod tests {
         assert!(
             (advanced - dt as f64).abs() < 1e-6,
             "noise clock advanced by {advanced} after long uptime"
+        );
+    }
+
+    #[test]
+    fn default_size_is_half_of_previous() {
+        let (w, h) = (80, 24);
+        let worm = Worm::new(&config(3), w, h);
+        let t = worm.base_t;
+        assert!(
+            (t - 0.0675 * h as f32).abs() < 1e-3,
+            "auto thickness {t} should be half of the old 0.135*h"
+        );
+        let len = LENGTH_RATIO * t;
+        assert!(
+            (len - 0.675 * h as f32).abs() < 0.2,
+            "straight body length {len} should be half of the old 1.35*h"
         );
     }
 
