@@ -146,6 +146,7 @@ pub struct MenuState {
     pub focus: Focus,
     pub at_start: bool,
     pub params: Params,
+    pub selected: Being,
 }
 
 impl Default for MenuState {
@@ -158,6 +159,7 @@ impl Default for MenuState {
             focus: Focus::List,
             at_start: false,
             params: Params::default(),
+            selected: Being::Orb,
         }
     }
 }
@@ -282,6 +284,9 @@ pub fn on_key(state: &mut MenuState, key: Key) -> Option<TableAction> {
                         }
                         Some(TableAction::Noop)
                     } else {
+                        if let Some(being) = Being::all().get(state.list_index - 1).copied() {
+                            state.selected = being;
+                        }
                         Some(TableAction::Noop)
                     }
                 }
@@ -419,6 +424,20 @@ fn draw_box(
     buf[y1 * w + x1] = Cell { ch: '╯', color };
 }
 
+fn being_mark(state: &MenuState, index: usize) -> char {
+    if state.playlist_on {
+        if state.marked[index] {
+            '▪'
+        } else {
+            '○'
+        }
+    } else if state.selected == Being::all()[index] {
+        '●'
+    } else {
+        '○'
+    }
+}
+
 pub fn frame(
     state: &MenuState,
     preview: Option<&PreviewFrame>,
@@ -495,8 +514,7 @@ pub fn frame(
             playlist_color,
         );
         for (i, being) in Being::all().iter().enumerate() {
-            let mark = if state.marked[i] { '▪' } else { '○' };
-            let text = format!("{mark} {}", being.name());
+            let text = format!("{} {}", being_mark(state, i), being.name());
             let color = if state.focus == Focus::List && state.list_index == i + 1 {
                 accent
             } else {
@@ -534,8 +552,7 @@ pub fn frame(
         put_right(&mut buf, w, h, w, 0, playlist_text, playlist_color);
         for (i, being) in Being::all().iter().enumerate() {
             let row = i + 1;
-            let mark = if state.marked[i] { '▪' } else { '○' };
-            let text = format!("{mark} {}", being.name());
+            let text = format!("{} {}", being_mark(state, i), being.name());
             let color = if state.focus == Focus::List && state.list_index == row {
                 accent
             } else {
@@ -707,18 +724,18 @@ pub fn drain(rx: &Receiver<Event>) {
     while rx.try_recv().is_ok() {}
 }
 
-fn hovered_being(state: &MenuState, cfg: &Config) -> Being {
-    if state.list_index == 0 {
-        cfg.being.unwrap_or(Being::Orb)
-    } else {
+fn preview_being(state: &MenuState) -> Being {
+    if state.focus == Focus::List && state.list_index > 0 {
         Being::all()
             .get(state.list_index - 1)
             .copied()
-            .unwrap_or(Being::Orb)
+            .unwrap_or(state.selected)
+    } else {
+        state.selected
     }
 }
 
-fn run_request(state: &MenuState, cfg: &Config) -> RunRequest {
+fn run_request(state: &MenuState) -> RunRequest {
     if state.playlist_on {
         let marked: Vec<Being> = Being::all()
             .iter()
@@ -739,7 +756,7 @@ fn run_request(state: &MenuState, cfg: &Config) -> RunRequest {
         }
     } else {
         RunRequest {
-            single: Some(hovered_being(state, cfg)),
+            single: Some(state.selected),
             playlist: None,
             interval: None,
             params: state.params.clone(),
@@ -779,6 +796,7 @@ pub fn run(
 ) -> Option<RunRequest> {
     let mut state = MenuState {
         params: Params::from_cfg(cfg),
+        selected: cfg.being.unwrap_or(Being::Orb),
         ..MenuState::default()
     };
     let dt = 1.0f32 / 12.0;
@@ -790,7 +808,7 @@ pub fn run(
     loop {
         let frame_start = Instant::now();
         let (w, h) = term.sync().ok()?;
-        let hovered = hovered_being(&state, cfg);
+        let previewed = preview_being(&state);
 
         let preview = layout(w, h).preview.and_then(|(ix, iy, iw, ih)| {
             let pw = iw.saturating_sub(2);
@@ -798,7 +816,7 @@ pub fn run(
             if pw == 0 || ph == 0 {
                 return None;
             }
-            let key = preview_key(hovered, &state.params, pw, ph);
+            let key = preview_key(previewed, &state.params, pw, ph);
             let mut cache = match preview_sim.take() {
                 Some(mut cached) => {
                     if cached.key != key {
@@ -837,7 +855,7 @@ pub fn run(
                     return None;
                 }
                 Some(TableAction::Run) => {
-                    let request = run_request(&state, cfg);
+                    let request = run_request(&state);
                     drain(rx);
                     term.restore();
                     return Some(request);
@@ -918,6 +936,7 @@ mod tests {
         assert_eq!(state.focus, Focus::List);
         assert!(!state.at_start);
         assert_eq!(state.params, Params::default());
+        assert_eq!(state.selected, Being::Orb);
     }
 
     #[test]
@@ -1102,6 +1121,42 @@ mod tests {
         on_key(&mut state, Key::Down);
         assert_eq!(on_key(&mut state, Key::Enter), Some(TableAction::Noop));
         assert_eq!(state.focus, Focus::List);
+    }
+
+    #[test]
+    fn enter_commits_being_as_start_target() {
+        let mut state = MenuState::default();
+        on_key(&mut state, Key::Down);
+        assert_eq!(on_key(&mut state, Key::Enter), Some(TableAction::Noop));
+        on_key(&mut state, Key::Down);
+        assert_eq!(run_request(&state).single, Some(Being::Orb));
+        on_key(&mut state, Key::Down);
+        assert!(state.at_start);
+    }
+
+    #[test]
+    fn committed_being_survives_hovering_the_playlist_row() {
+        let mut state = MenuState::default();
+        on_key(&mut state, Key::Down);
+        on_key(&mut state, Key::Down);
+        on_key(&mut state, Key::Enter);
+        on_key(&mut state, Key::Up);
+        on_key(&mut state, Key::Up);
+        assert_eq!(state.list_index, 0);
+        assert_eq!(run_request(&state).single, Some(Being::Carrion));
+    }
+
+    #[test]
+    fn playlist_run_ignores_committed_single_selection() {
+        let mut state = MenuState::default();
+        on_key(&mut state, Key::Down);
+        on_key(&mut state, Key::Enter);
+        on_key(&mut state, Key::Up);
+        on_key(&mut state, Key::Enter);
+        assert!(state.playlist_on);
+        let req = run_request(&state);
+        assert_eq!(req.single, None);
+        assert_eq!(req.playlist, Some(Being::all().to_vec()));
     }
 
     #[test]
@@ -1475,23 +1530,52 @@ mod tests {
     }
 
     #[test]
-    fn hovered_being_tracks_list_index() {
-        let cfg = Config::default();
+    fn preview_being_tracks_hovered_mode_row() {
         let mut state = MenuState::default();
-        assert_eq!(hovered_being(&state, &cfg), Being::Orb);
+        assert_eq!(preview_being(&state), Being::Orb);
         state.list_index = 1;
-        assert_eq!(hovered_being(&state, &cfg), Being::Orb);
+        assert_eq!(preview_being(&state), Being::Orb);
         state.list_index = 2;
-        assert_eq!(hovered_being(&state, &cfg), Being::Carrion);
+        assert_eq!(preview_being(&state), Being::Carrion);
+    }
+
+    #[test]
+    fn preview_shows_selection_at_start() {
+        let mut state = MenuState::default();
+        on_key(&mut state, Key::Down);
+        on_key(&mut state, Key::Down);
+        assert_eq!(preview_being(&state), Being::Carrion);
+        on_key(&mut state, Key::Down);
+        assert!(state.at_start);
+        assert_eq!(preview_being(&state), Being::Orb);
+    }
+
+    #[test]
+    fn preview_shows_selection_on_playlist_row() {
+        let mut state = MenuState::default();
+        on_key(&mut state, Key::Down);
+        on_key(&mut state, Key::Down);
+        on_key(&mut state, Key::Enter);
+        on_key(&mut state, Key::Up);
+        on_key(&mut state, Key::Up);
+        assert_eq!(state.list_index, 0);
+        assert_eq!(preview_being(&state), Being::Carrion);
+    }
+
+    #[test]
+    fn preview_shows_selection_while_editing_params() {
+        let mut state = MenuState::default();
+        on_key(&mut state, Key::Down);
+        on_key(&mut state, Key::Enter);
+        on_key(&mut state, Key::Down);
+        on_key(&mut state, Key::Right);
+        assert_eq!(state.focus, Focus::Params);
+        assert_eq!(preview_being(&state), Being::Orb);
     }
 
     #[test]
     fn run_request_assembles_single_and_playlist() {
-        let cfg = Config {
-            being: Some(Being::Orb),
-            ..Config::default()
-        };
-        let single = run_request(&MenuState::default(), &cfg);
+        let single = run_request(&MenuState::default());
         assert_eq!(single.single, Some(Being::Orb));
         assert!(single.playlist.is_none());
         assert!(single.interval.is_none());
@@ -1501,13 +1585,13 @@ mod tests {
             marked: [false, true],
             ..MenuState::default()
         };
-        let req = run_request(&marked, &cfg);
+        let req = run_request(&marked);
         assert_eq!(req.single, None);
         assert_eq!(req.playlist, Some(vec![Being::Carrion]));
         assert_eq!(req.interval, Some(marked.params.interval));
 
         marked.marked = [false, false];
-        let req = run_request(&marked, &cfg);
+        let req = run_request(&marked);
         assert_eq!(req.playlist, Some(Being::all().to_vec()));
     }
 
@@ -1751,7 +1835,7 @@ mod render_tests {
     fn modes_rows_are_left_aligned_in_top_left_box() {
         let cells = frame(&blank(), None, W, H, ColorMode::TrueColor);
         assert_eq!(row_text(&cells, W, 1, 1, 15), "Playlist [off]");
-        assert_eq!(row_text(&cells, W, 2, 1, 6), "○ orb");
+        assert_eq!(row_text(&cells, W, 2, 1, 6), "● orb");
         assert_eq!(row_text(&cells, W, 3, 1, 10), "○ carrion");
     }
 
@@ -1768,6 +1852,7 @@ mod render_tests {
     #[test]
     fn marks_track_state() {
         let state = MenuState {
+            playlist_on: true,
             marked: [true, false],
             ..blank()
         };
@@ -1776,12 +1861,27 @@ mod render_tests {
         assert_eq!(at(&cells, W, 1, 3).ch, '○');
 
         let flipped = MenuState {
+            playlist_on: true,
             marked: [false, true],
             ..blank()
         };
         let cells = frame(&flipped, None, W, H, ColorMode::TrueColor);
         assert_eq!(at(&cells, W, 1, 2).ch, '○');
         assert_eq!(at(&cells, W, 1, 3).ch, '▪');
+    }
+
+    #[test]
+    fn checked_mode_marks_and_hover_does_not_move_it() {
+        let mut state = blank();
+        on_key(&mut state, Key::Down);
+        on_key(&mut state, Key::Down);
+        let cells = frame(&state, None, W, H, ColorMode::TrueColor);
+        assert_eq!(row_text(&cells, W, 2, 1, 6), "● orb");
+        assert_eq!(row_text(&cells, W, 3, 1, 10), "○ carrion");
+        on_key(&mut state, Key::Enter);
+        let cells = frame(&state, None, W, H, ColorMode::TrueColor);
+        assert_eq!(row_text(&cells, W, 2, 1, 6), "○ orb");
+        assert_eq!(row_text(&cells, W, 3, 1, 10), "● carrion");
     }
 
     #[test]
