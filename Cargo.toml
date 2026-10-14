@@ -6,7 +6,7 @@ rust-version = "1.70"
 description = "Screensaver creatures that roam your terminal to prevent screen burn-in"
 repository = "https://github.com/benyamin-git/ORBYN"
 readme = "README.md"
-license-file = "LICENSE"
+license = "MIT"
 keywords = ["terminal", "screensaver", "burn-in", "ascii", "cli"]
 categories = ["command-line-utilities", "graphics"]
 

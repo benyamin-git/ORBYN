@@ -136,4 +136,4 @@ scripts/samples.sh
 
 ## License
 
-[DO WHATEVER YOU WANT LICENSE](LICENSE).
+[MIT](LICENSE).
