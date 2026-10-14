@@ -7,6 +7,9 @@ pub enum Tone {
     Flesh,
     Groove,
     Gore,
+    WormDark,
+    WormMid,
+    WormHot,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]

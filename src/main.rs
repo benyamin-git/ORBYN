@@ -9,6 +9,7 @@ mod rng;
 mod rotation;
 mod scene;
 mod term;
+mod worm;
 
 use std::io::{self, IsTerminal};
 use std::time::{Duration, Instant};
@@ -586,6 +587,7 @@ mod tests {
         match &fresh {
             Sim::Orb(app) => assert!((app.speed - session_speed).abs() < 1e-6),
             Sim::Carrion(_) => panic!("expected orb"),
+            Sim::Worm(_) => panic!("expected orb"),
         }
 
         swap_to(&mut sim, Being::Carrion, &c, w, h, false);

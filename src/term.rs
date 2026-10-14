@@ -150,6 +150,14 @@ pub const FLESH_CH: char = '#';
 pub const GROOVE_CH: char = '=';
 pub const GORE_CH: char = '-';
 
+pub const WORM_DARK_RED: Color = Color::Rgb(0x65, 0x10, 0x1A);
+pub const WORM_MID_RED: Color = Color::Rgb(0xD9, 0x1F, 0x32);
+pub const WORM_HOT_RED: Color = Color::Rgb(0xFF, 0x35, 0x48);
+
+pub const WORM_DARK_CH: char = ':';
+pub const WORM_MID_CH: char = '#';
+pub const WORM_HOT_CH: char = '%';
+
 fn flesh_color(mode: ColorMode) -> Color {
     match mode {
         ColorMode::Mono => Color::Default,
@@ -180,7 +188,60 @@ fn carrion_cell(cell: &crate::scene::Cell, mode: ColorMode) -> Cell {
     let (default_ch, color) = match tone {
         Tone::Groove => (GROOVE_CH, groove_color(mode)),
         Tone::Gore => (GORE_CH, flesh_color(mode)),
-        Tone::Blank | Tone::Flesh => (FLESH_CH, flesh_color(mode)),
+        Tone::Blank | Tone::Flesh | Tone::WormDark | Tone::WormMid | Tone::WormHot => {
+            (FLESH_CH, flesh_color(mode))
+        }
+    };
+    let ch = if cell.ch == 0 {
+        default_ch
+    } else {
+        cell.ch as char
+    };
+    Cell { ch, color }
+}
+
+fn worm_dark_color(mode: ColorMode) -> Color {
+    match mode {
+        ColorMode::Mono => Color::Default,
+        ColorMode::Ansi16 => Color::Basic(31),
+        ColorMode::Ansi256 => Color::Indexed(52),
+        ColorMode::TrueColor | ColorMode::Auto => WORM_DARK_RED,
+    }
+}
+
+fn worm_mid_color(mode: ColorMode) -> Color {
+    match mode {
+        ColorMode::Mono => Color::Default,
+        ColorMode::Ansi16 => Color::Basic(91),
+        ColorMode::Ansi256 => Color::Indexed(160),
+        ColorMode::TrueColor | ColorMode::Auto => WORM_MID_RED,
+    }
+}
+
+fn worm_hot_color(mode: ColorMode) -> Color {
+    match mode {
+        ColorMode::Mono => Color::Default,
+        ColorMode::Ansi16 => Color::Basic(91),
+        ColorMode::Ansi256 => Color::Indexed(203),
+        ColorMode::TrueColor | ColorMode::Auto => WORM_HOT_RED,
+    }
+}
+
+fn worm_cell(cell: &crate::scene::Cell, mode: ColorMode) -> Cell {
+    if cell.v <= 0.0 && cell.tone == Tone::Blank {
+        return Cell::BLANK;
+    }
+    let tone = if cell.tone == Tone::Blank {
+        Tone::WormMid
+    } else {
+        cell.tone
+    };
+    let (default_ch, color) = match tone {
+        Tone::WormDark => (WORM_DARK_CH, worm_dark_color(mode)),
+        Tone::WormHot => (WORM_HOT_CH, worm_hot_color(mode)),
+        Tone::Blank | Tone::WormMid | Tone::Flesh | Tone::Groove | Tone::Gore => {
+            (WORM_MID_CH, worm_mid_color(mode))
+        }
     };
     let ch = if cell.ch == 0 {
         default_ch
@@ -206,6 +267,7 @@ pub fn cells_for(grid: &Grid, being: Being, mode: ColorMode) -> Vec<Cell> {
         .map(|cell| match being {
             Being::Orb => orb_cell(cell.v, cell.ch, mode),
             Being::Carrion => carrion_cell(cell, mode),
+            Being::Worm => worm_cell(cell, mode),
         })
         .collect()
 }
@@ -428,6 +490,7 @@ fn title(being: Being) -> &'static [u8] {
     match being {
         Being::Orb => b"\x1b]0;ORBYN\x1b\\",
         Being::Carrion => b"\x1b]0;ORBYN // CARRION\x1b\\",
+        Being::Worm => b"\x1b]0;ORBYN // WORM\x1b\\",
     }
 }
 
@@ -575,7 +638,9 @@ mod tests {
     fn title_matches_being() {
         assert_eq!(title(Being::Orb), b"\x1b]0;ORBYN\x1b\\");
         assert_eq!(title(Being::Carrion), b"\x1b]0;ORBYN // CARRION\x1b\\");
+        assert_eq!(title(Being::Worm), b"\x1b]0;ORBYN // WORM\x1b\\");
         assert_ne!(title(Being::Orb), title(Being::Carrion));
+        assert_ne!(title(Being::Worm), title(Being::Carrion));
     }
 
     #[test]
@@ -739,10 +804,14 @@ mod tests {
         grid.stamp(0, 0, 1.0);
         let orb = cells_for(&grid, Being::Orb, ColorMode::TrueColor);
         let carrion = cells_for(&grid, Being::Carrion, ColorMode::TrueColor);
+        let worm = cells_for(&grid, Being::Worm, ColorMode::TrueColor);
         assert_eq!(orb.len(), 2);
         assert_eq!(carrion.len(), 2);
+        assert_eq!(worm.len(), 2);
         assert_eq!(orb[0].ch, '@');
         assert_eq!(carrion[0].color, FLESH_RED);
+        assert_eq!(worm[0].color, WORM_MID_RED);
+        assert_ne!(worm[0].color, FLESH_RED);
     }
 
     fn lit(tone: Tone) -> crate::scene::Cell {
@@ -834,6 +903,89 @@ mod tests {
     #[test]
     fn carrion_blank_cell_stays_blank() {
         let out = carrion_cell(&crate::scene::Cell::EMPTY, ColorMode::TrueColor);
+        assert_eq!(out, Cell::BLANK);
+    }
+
+    #[test]
+    fn worm_truecolor_palette_is_exact() {
+        let dark = worm_cell(&lit(Tone::WormDark), ColorMode::TrueColor);
+        let mid = worm_cell(&lit(Tone::WormMid), ColorMode::TrueColor);
+        let hot = worm_cell(&lit(Tone::WormHot), ColorMode::TrueColor);
+        assert_eq!(dark.color, WORM_DARK_RED);
+        assert_eq!(mid.color, WORM_MID_RED);
+        assert_eq!(hot.color, WORM_HOT_RED);
+        assert_ne!(dark.color, mid.color);
+        assert_ne!(mid.color, hot.color);
+    }
+
+    #[test]
+    fn worm_fallback_palette_is_exact_per_mode() {
+        let cases = [
+            (
+                ColorMode::TrueColor,
+                [WORM_DARK_RED, WORM_MID_RED, WORM_HOT_RED],
+            ),
+            (
+                ColorMode::Ansi256,
+                [Color::Indexed(52), Color::Indexed(160), Color::Indexed(203)],
+            ),
+            (
+                ColorMode::Ansi16,
+                [Color::Basic(31), Color::Basic(91), Color::Basic(91)],
+            ),
+            (
+                ColorMode::Mono,
+                [Color::Default, Color::Default, Color::Default],
+            ),
+        ];
+        let tones = [Tone::WormDark, Tone::WormMid, Tone::WormHot];
+        for (mode, expected) in cases {
+            let mid = expected[1];
+            for (tone, want) in tones.iter().zip(expected) {
+                let out = worm_cell(&lit(*tone), mode);
+                assert_eq!(
+                    out.color, want,
+                    "tone {tone:?} in {mode:?} mapped to {:?}",
+                    out.color
+                );
+            }
+            let blank = worm_cell(&lit(Tone::Blank), mode);
+            assert_eq!(
+                blank.color, mid,
+                "lit blank in {mode:?} mapped to {:?}",
+                blank.color
+            );
+        }
+    }
+
+    #[test]
+    fn worm_glyphs_distinguish_tone_in_mono() {
+        let dark = worm_cell(&lit(Tone::WormDark), ColorMode::Mono);
+        let mid = worm_cell(&lit(Tone::WormMid), ColorMode::Mono);
+        let hot = worm_cell(&lit(Tone::WormHot), ColorMode::Mono);
+        assert_eq!(dark.ch, WORM_DARK_CH);
+        assert_eq!(mid.ch, WORM_MID_CH);
+        assert_eq!(hot.ch, WORM_HOT_CH);
+        assert_ne!(dark.ch, mid.ch);
+        assert_ne!(mid.ch, hot.ch);
+        assert_ne!(dark.ch, hot.ch);
+    }
+
+    #[test]
+    fn worm_lit_untinted_cell_reads_as_mid() {
+        let cell = crate::scene::Cell {
+            v: 0.6,
+            ch: b'X',
+            tone: Tone::Blank,
+        };
+        let out = worm_cell(&cell, ColorMode::TrueColor);
+        assert_eq!(out.ch, 'X');
+        assert_eq!(out.color, WORM_MID_RED);
+    }
+
+    #[test]
+    fn worm_blank_cell_stays_blank() {
+        let out = worm_cell(&crate::scene::Cell::EMPTY, ColorMode::TrueColor);
         assert_eq!(out, Cell::BLANK);
     }
 }
