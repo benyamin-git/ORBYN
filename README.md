@@ -43,10 +43,14 @@ Menu keys:
 
 - `Up` / `Down` — move through the mode list and parameter rows
 - `Left` / `Right` — switch between the mode list and the parameter column
-- `Enter` — start (only from `[ START ]`); on the playlist row it toggles
-  playlist mode, and on a mode row while playlist mode is on it marks that mode
+- `Enter` — on the playlist row, toggle playlist mode; on a mode row, select
+  it as the mode that `[ START ]` runs (while playlist mode is on, toggle its
+  mark instead); on `[ START ]`, start
 - `+` / `-` — adjust the focused parameter
 - `q` or `Esc` — quit
+
+Moving the cursor previews modes live, falling back to the checked mode when no
+mode is hovered; `[ START ]` runs the checked mode, orb by default.
 
 ### Direct run
 
